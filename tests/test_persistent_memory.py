@@ -183,7 +183,7 @@ def test_agent_run_lifecycle_is_archived(monkeypatch) -> None:
     registry = AgentRunRegistry()
 
     run = registry.begin("session-4", "turn-4")
-    step = registry.start_step(run, "识别意图", node_name="intent_router_node", step_type="plan")
+    step = registry.start_step(run, "监督路由", node_name="supervisor_node", step_type="plan")
     registry.complete_step(
         run,
         step["id"],

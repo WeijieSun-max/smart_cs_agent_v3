@@ -33,8 +33,6 @@ def test_workflow_constructs_without_external_services() -> None:
 def test_chat_state_has_current_runtime_defaults() -> None:
     state = create_chat_state("user_001", "session_001", "查询套餐")
 
-    assert state["pending_action_intent"] == "none"
-    assert state["pending_action_route"] == "route"
     assert state["skill_selection"] is None
     assert state["skill_result"] is None
     assert state["route_decision"] is None

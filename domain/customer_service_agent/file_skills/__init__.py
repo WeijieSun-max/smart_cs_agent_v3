@@ -1,4 +1,4 @@
-from .catalog import FileSkillCatalog, get_catalog, initialize_catalog, reset_catalog
+from .catalog import FileSkillCatalog, get_catalog, initialize_catalog
 from .models import LoadedSkill, SkillMetadata
 
 __all__ = [
@@ -7,5 +7,4 @@ __all__ = [
     "SkillMetadata",
     "get_catalog",
     "initialize_catalog",
-    "reset_catalog",
 ]

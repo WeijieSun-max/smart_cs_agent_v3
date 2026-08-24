@@ -6,7 +6,7 @@ from pathlib import Path
 from threading import RLock
 from typing import Any
 
-from domain.customer_service_agent.service import conversation_archive_service, short_term_memory_service, ticket_service
+from domain.customer_service_agent.service import conversation_archive_service, short_term_memory_service
 from domain.customer_service_agent.tools.tool_registry import get_mcp_server
 from pkg.config.settings import ENV_FILE, get_settings
 from pkg.security import get_local_user_id, set_local_user_id
@@ -84,10 +84,6 @@ def _retarget_user_scoped_services(user_id: str) -> None:
     archive = conversation_archive_service.get_service_or_none()
     if archive is not None:
         targets.append(archive)
-    try:
-        targets.append(ticket_service.get_service().repository)
-    except RuntimeError:
-        pass
     for target in targets:
         if target is None:
             continue

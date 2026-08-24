@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from domain.customer_service_agent.service import ticket_service
-from infra.customer_service.ticket_repository import TicketRepository
 from infra.customer_service.file_skill_bootstrap import initialize_file_skills
 from infra.business import MySQLBusinessStore
 from domain.business.service import initialize_service as initialize_business_service
@@ -21,7 +19,6 @@ def initialize_customer_service_dependencies() -> None:
     apply_migrations(mysql_client.get_mysql_client(), get_settings().root_dir / "migrations")
     initialize_session_ownership(mysql_client.get_mysql_client())
 
-    ticket_service.initialize_service(TicketRepository(mysql_client.get_mysql_client()))
     business = initialize_business_service(MySQLBusinessStore(mysql_client.get_mysql_client()))
     initialize_action_service(
         GovernedActionService(

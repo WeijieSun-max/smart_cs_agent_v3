@@ -12,7 +12,6 @@ from application.customer_service.node_trace import NodeTraceRecorder
 from application.customer_service.stream_events import (
     encode_sse as _encode_sse,
     generate_replay_events as _generate_replay_events,
-    safe_skill_sse_event as _safe_skill_sse_event,
 )
 from application.customer_service.turn_context import (
     clear_checkpoint as _clear_checkpoint,
@@ -232,10 +231,6 @@ async def _generate_stream_events_admitted(graph, chat_state, session_id: str, u
         try:
             config = _build_graph_config(user_id, session_id, turn.turn_id)
             async for event in graph.astream_events(chat_state, config=config, version="v2"):
-                skill_event = _safe_skill_sse_event(event)
-                if skill_event is not None:
-                    yield _encode_sse(skill_event)
-                    continue
                 try:
                     trace_event = trace_recorder.consume(event)
                 except Exception as trace_error:

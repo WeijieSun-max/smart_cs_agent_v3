@@ -15,39 +15,34 @@ def merge_node_logs(existing: list[str] | None, new: list[str]) -> list[str]:
     return [*(existing or []), *new]
 
 
+# 继承 MessagesState，因此 ChatState 自动包含 messages（对话消息历史）字段。
 class ChatState(MessagesState):
-    user_id: str | None
-    session_id: str
-    current_time: str
-    turn_id: str
-    raw_query: str
-    prior_context: str
-    memory_packet: dict[str, Any] | None
-    user_message_persisted: bool
-    context_text: str
-    intent: str | None
-    primary_intent: str | None
-    secondary_intent: str | None
-    confidence: float | None
-    entities: dict[str, str]
-    sub_results: dict[str, Any]
-    compliance_passed: bool
-    compliance_result: dict[str, Any]
-    final_response: str
-    current_agent: str
-    node_logs: Annotated[list[str], merge_node_logs]
-    pending_action_intent: str
-    pending_action_route: str
-    skill_selection: dict[str, Any] | None
-    skill_result: dict[str, Any] | None
-    request_id: str | None
-    identity_source: str
-    auth_strength: str
-    route_decision: dict[str, Any] | None
-    task_plan: dict[str, Any] | None
-    task_results: dict[str, Any]
+    user_id: str | None  # 当前用户的唯一标识；未登录或匿名访问时可为空。
+    session_id: str  # 会话唯一标识，用于关联同一轮多轮对话。
+    current_time: str  # 当前请求的日期上下文，供需要时间信息的节点使用。
+    turn_id: str  # 单次请求/对话轮次的唯一标识，粒度比 session_id 更细。
+    raw_query: str  # 用户本轮输入的原始问题，未经改写或处理。
+    prior_context: str  # 进入工作流前已准备好的历史对话上下文。
+    memory_packet: dict[str, Any] | None  # 长期记忆检索结果及其相关元数据。
+    user_message_persisted: bool  # 当前用户消息是否已成功写入持久化存储，避免重复保存。
+    context_text: str  # 工作流节点汇总、整理后供后续推理使用的文本上下文。
+    intent: str | None  # 识别出的用户意图，用于路由到对应处理流程。
+    sub_results: dict[str, Any]  # 子任务或子节点的中间处理结果集合。
+    compliance_passed: bool  # 合规校验是否通过；决定是否允许正常输出。
+    compliance_result: dict[str, Any]  # 合规校验的详细结果，例如风险类型和拦截原因。
+    final_response: str  # 工作流最终生成、准备返回给用户的回复。
+    current_agent: str  # 当前正在执行或最近执行的智能体/节点名称。
+    node_logs: Annotated[list[str], merge_node_logs]  # 节点执行日志；通过 merge_node_logs 进行累加或重置。
+    skill_selection: dict[str, Any] | None  # 技能选择阶段的结果，包括命中的技能及选择依据。
+    skill_result: dict[str, Any] | None  # 被调用技能的执行结果。
+    request_id: str | None  # 外部请求追踪 ID，用于链路追踪与问题排查。
+    identity_source: str  # 用户身份信息的来源，例如请求体、令牌或系统注入。
+    auth_strength: str  # 身份认证强度或可信等级，供权限与风险判断使用。
+    route_decision: dict[str, Any] | None  # 路由决策详情，例如目标智能体、处理策略和原因。
+    task_plan: dict[str, Any] | None  # 复杂请求拆解出的执行计划。
+    task_results: dict[str, Any]  # 执行计划中各任务的处理结果集合。
 
-
+# * 之后的参数为仅限关键字参数，调用时必须以参数名传入。
 def create_chat_state(
     user_id: str | None,
     session_id: str | None,
@@ -71,18 +66,12 @@ def create_chat_state(
         "messages": [HumanMessage(content=query)],
         "context_text": "",
         "intent": None,
-        "primary_intent": None,
-        "secondary_intent": None,
-        "confidence": None,
-        "entities": {},
         "sub_results": {},
         "compliance_passed": True,
         "compliance_result": {},
         "final_response": "",
         "current_agent": "",
         "node_logs": [],
-        "pending_action_intent": "none",
-        "pending_action_route": "route",
         "skill_selection": None,
         "skill_result": None,
         "request_id": None,

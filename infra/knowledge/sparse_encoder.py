@@ -19,10 +19,6 @@ class LocalSparseEncoder:
         return models.SparseVector(indices=indices, values=values)
 
 
-def encode_sparse(text: str) -> models.SparseVector:
-    return LocalSparseEncoder().encode(text)
-
-
 def _terms(text: str) -> list[str]:
     normalized = unicodedata.normalize("NFKC", text).lower()
     chinese_runs = re.findall(r"[㐀-鿿]+", normalized)

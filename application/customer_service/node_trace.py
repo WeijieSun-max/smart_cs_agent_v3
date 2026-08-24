@@ -47,18 +47,6 @@ _MEMORY_REFERENCE_PATTERN = re.compile(
     r"<<<MEMORY_REFERENCE_DATA>>>.*?<<<END_MEMORY_REFERENCE_DATA>>>",
     re.DOTALL,
 )
-_TRACE_SKILLS = frozenset(
-    {
-        "onboarding_process_guide",
-        "onboarding_material_check",
-        "onboarding_risk_assessment",
-        "onboarding_eligibility_check",
-        "none",
-    }
-)
-_TRACE_TOOLS = frozenset(
-    {"knowledge_search", "user_profile", "risk_check", "ticket_create"}
-)
 
 
 def serialize_debug_value(value: Any, *, max_bytes: int = MAX_DEBUG_PAYLOAD_BYTES) -> Any:
@@ -127,25 +115,11 @@ def _convert_value(value: Any, *, seen: set[int], depth: int) -> Any:
         seen.add(value_id)
         try:
             items = list(value.items())
-            exact_keys = {key for key, _ in items if type(key) is str}
-            if {"status", "skill_name", "tool_calls", "budget_usage"}.issubset(
-                exact_keys
-            ):
-                return _skill_result_trace_summary(value)
-            if {"selected_skill", "confidence"}.issubset(exact_keys):
-                return _skill_selection_trace_summary(value)
             mapped: dict[str, Any] = {}
             for key, item in items[:MAX_DEBUG_COLLECTION_ITEMS]:
-                text_key = str(key)
-                normalized_key = re.sub(r"[^a-z0-9]", "", text_key.strip().lower())
-                if normalized_key == "skillresult":
-                    mapped[text_key] = _skill_result_trace_summary(item)
-                elif normalized_key == "skillselection":
-                    mapped[text_key] = _skill_selection_trace_summary(item)
-                else:
-                    mapped[text_key] = _convert_value(
-                        item, seen=seen, depth=depth + 1
-                    )
+                mapped[str(key)] = _convert_value(
+                    item, seen=seen, depth=depth + 1
+                )
             if len(items) > MAX_DEBUG_COLLECTION_ITEMS:
                 mapped["_debug_truncated"] = {
                     "reason": "collection item limit exceeded",
@@ -252,109 +226,6 @@ def _memory_packet_trace_summary(packet: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _trace_mapping(value: Any) -> Mapping[str, Any]:
-    if isinstance(value, BaseModel):
-        return value.model_dump()
-    return value if isinstance(value, Mapping) else {}
-
-
-def _safe_skill_name(value: Any) -> str | None:
-    return value if type(value) is str and value in _TRACE_SKILLS else None
-
-
-def _safe_tool_name(value: Any) -> str | None:
-    return value if type(value) is str and value in _TRACE_TOOLS else None
-
-
-def _skill_result_trace_summary(value: Any) -> dict[str, Any]:
-    result = _trace_mapping(value)
-    summary: dict[str, Any] = {}
-    status = result.get("status")
-    if type(status) is str and status in {
-        "completed",
-        "needs_clarification",
-        "awaiting_confirmation",
-        "indeterminate",
-        "rejected",
-        "budget_exhausted",
-        "failed",
-    }:
-        summary["status"] = status
-    skill_name = _safe_skill_name(result.get("skill_name"))
-    if skill_name is not None:
-        summary["skill_name"] = skill_name
-    pending_action_id = result.get("pending_action_id")
-    if type(pending_action_id) is str and re.fullmatch(r"[A-Za-z0-9._:-]{1,64}", pending_action_id):
-        summary["pending_action_id"] = pending_action_id
-    calls = result.get("tool_calls")
-    safe_calls: list[dict[str, Any]] = []
-    if isinstance(calls, (list, tuple)):
-        for raw_call in calls[:5]:
-            call = _trace_mapping(raw_call)
-            tool_name = _safe_tool_name(call.get("tool_name"))
-            success = call.get("success")
-            if tool_name is None or type(success) is not bool:
-                continue
-            safe_calls.append({"tool_name": tool_name, "success": success})
-    summary["tool_calls"] = safe_calls
-    budget = _trace_mapping(result.get("budget_usage"))
-    safe_budget = {
-        key: number
-        for key, maximum in {
-            "selector_llm_decisions": 1,
-            "runtime_llm_decisions": 3,
-            "tool_calls": 5,
-            "elapsed_ms": 30_000,
-        }.items()
-        if type((number := budget.get(key))) is int and 0 <= number <= maximum
-    }
-    if safe_budget:
-        summary["budget_usage"] = safe_budget
-    return summary
-
-
-def _skill_selection_trace_summary(value: Any) -> dict[str, Any]:
-    selection = _trace_mapping(value)
-    summary: dict[str, Any] = {}
-    selected = _safe_skill_name(selection.get("selected_skill"))
-    if selected is not None:
-        summary["selected_skill"] = selected
-    confidence = selection.get("confidence")
-    if (
-        not isinstance(confidence, bool)
-        and isinstance(confidence, (int, float))
-        and 0 <= confidence <= 1
-    ):
-        summary["confidence"] = float(confidence)
-    candidates = selection.get("candidate_names", selection.get("candidates"))
-    safe_candidates: list[str] = []
-    if isinstance(candidates, (list, tuple)):
-        for candidate in candidates[:4]:
-            mapped = _trace_mapping(candidate)
-            candidate_name = _safe_skill_name(
-                mapped.get("name") if mapped else candidate
-            )
-            if candidate_name is not None:
-                safe_candidates.append(candidate_name)
-    if safe_candidates:
-        summary["candidate_names"] = safe_candidates
-    return summary
-
-
-def _dynamic_skill_node_trace_summary(value: Any) -> dict[str, Any]:
-    output = _trace_mapping(value)
-    summary: dict[str, Any] = {}
-    if "skill_selection" in output:
-        summary["skill_selection"] = _skill_selection_trace_summary(
-            output.get("skill_selection")
-        )
-    if "skill_result" in output:
-        summary["skill_result"] = _skill_result_trace_summary(
-            output.get("skill_result")
-        )
-    return summary
-
-
 def _safe_repr(value: Any) -> str:
     try:
         return _redact_string(repr(value))
@@ -423,11 +294,7 @@ class NodeTraceRecorder:
         model_call_id = str(event.get("run_id"))
         self._model_owners[model_call_id] = node_trace_id
         raw_prompt = (event.get("data") or {}).get("input")
-        prompt = (
-            {"redacted": True, "reason": "dynamic_skill_payload"}
-            if node_name == "dynamic_skill_agent_node"
-            else serialize_debug_value(raw_prompt)
-        )
+        prompt = serialize_debug_value(raw_prompt)
         return self._event(
             "llm_start",
             node_trace_id=node_trace_id,
@@ -449,11 +316,7 @@ class NodeTraceRecorder:
             if node_name is None:
                 return None
         raw_response = (event.get("data") or {}).get("output")
-        response = (
-            {"redacted": True, "reason": "dynamic_skill_payload"}
-            if node_name == "dynamic_skill_agent_node"
-            else serialize_debug_value(raw_response)
-        )
+        response = serialize_debug_value(raw_response)
         return self._event(
             "llm_end",
             node_trace_id=node_trace_id,
@@ -473,11 +336,7 @@ class NodeTraceRecorder:
         for call_id in stale_model_calls:
             self._model_owners.pop(call_id, None)
         raw_output = (event.get("data") or {}).get("output")
-        output = (
-            _dynamic_skill_node_trace_summary(raw_output)
-            if node_name == "dynamic_skill_agent_node"
-            else serialize_debug_value(raw_output)
-        )
+        output = serialize_debug_value(raw_output)
         return self._event(
             "node_end",
             node_trace_id=node_trace_id,

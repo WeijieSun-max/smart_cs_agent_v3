@@ -9,7 +9,7 @@ from adapter.web.schemas.chat import ChatRequest, ChatStreamRequest, FeedbackReq
 from application.customer_service import chat_service, memory_admin_service
 from domain.customer_service_agent.service import short_term_memory_service
 from domain.customer_service_agent.tools.tool_registry import get_mcp_server
-from pkg.telemetry import memory_metrics_snapshot, skill_metrics_snapshot, submit_user_feedback
+from pkg.telemetry import memory_metrics_snapshot, submit_user_feedback
 from pkg.security.request_identity import resolve_request_user
 from pkg.security import get_local_user_id
 from application.customer_service.session_ownership import get_session_ownership
@@ -76,7 +76,6 @@ def get_metrics():
     return {
         "tool_call_log": get_mcp_server().get_call_log(last_n=20),
         "memory": memory_metrics_snapshot(),
-        "skills": skill_metrics_snapshot(),
         "memory_outbox": memory_admin_service.current_outbox_status(),
     }
 

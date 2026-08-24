@@ -62,8 +62,6 @@ class TurnTrace:
 @dataclass
 class TurnDiagnostics:
     json_parse_results: dict[str, bool] = field(default_factory=dict)
-    raw_route_valid: bool | None = None
-    route_fallback_used: bool = False
     tool_calls: int = 0
     tool_failures: int = 0
     retrieval_calls: int = 0
@@ -75,8 +73,6 @@ class TurnDiagnostics:
         return {
             "json_parse_count": len(self.json_parse_results),
             "json_parse_failure_count": sum(not value for value in self.json_parse_results.values()),
-            "raw_route_valid": self.raw_route_valid,
-            "route_fallback_used": self.route_fallback_used,
             "tool_call_count": self.tool_calls,
             "tool_failure_count": self.tool_failures,
             "retrieval_call_count": self.retrieval_calls,
@@ -230,9 +226,6 @@ def finalize_turn(
     _score(root, "guardrail_blocked", not compliance_passed)
     _score(root, "fallback_used", bool(diagnostics.fallbacks))
 
-    if diagnostics.raw_route_valid is not None:
-        _score(root, "raw_route_valid", diagnostics.raw_route_valid)
-        _score(root, "route_fallback_used", diagnostics.route_fallback_used)
     if diagnostics.json_parse_results:
         _score(root, "json_parse_all_success", all(diagnostics.json_parse_results.values()))
     if diagnostics.tool_calls:
@@ -261,13 +254,6 @@ def record_json_parse(stage: str, success: bool) -> None:
     diagnostics = _current_diagnostics.get()
     if diagnostics is not None:
         diagnostics.json_parse_results[stage] = success
-
-
-def record_route(valid: bool, fallback_used: bool) -> None:
-    diagnostics = _current_diagnostics.get()
-    if diagnostics is not None:
-        diagnostics.raw_route_valid = valid
-        diagnostics.route_fallback_used = fallback_used
 
 
 def record_fallback(component: str) -> None:

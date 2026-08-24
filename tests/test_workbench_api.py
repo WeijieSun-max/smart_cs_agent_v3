@@ -37,16 +37,6 @@ def test_chinese_message_serialization_stays_utf8_text() -> None:
     assert memory._deserialize_message(serialized.encode("utf-8")) == message
 
 
-def test_metrics_endpoint_exposes_numeric_skill_aggregates() -> None:
-    payload = _client().get("/api/metrics").json()
-    assert set(payload["skills"]) == {"selection", "runtime", "pending", "security"}
-    assert all(
-        isinstance(value, (int, float))
-        for group in payload["skills"].values()
-        for value in group.values()
-    )
-
-
 def test_session_crud_and_history_contract() -> None:
     client = _client()
     session_id = uuid.uuid4().hex

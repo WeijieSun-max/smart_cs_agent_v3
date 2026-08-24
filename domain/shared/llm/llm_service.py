@@ -75,42 +75,6 @@ def _profile_for_run(run_name: str) -> str:
     return _profile_by_run_prefix[max(matches, key=len)] if matches else "default"
 
 
-def model_profile_snapshot() -> dict[str, str]:
-    return {prefix: profile for prefix, profile in sorted(_profile_by_run_prefix.items())}
-
-
-def invoke_structured_llm(
-    messages: Sequence[BaseMessage],
-    *,
-    schema: type[Any] | dict[str, Any],
-    run_name: str,
-    prompt_version: str = "v1",
-) -> Any:
-    """Use Qwen's OpenAI-compatible JSON Schema structured output path."""
-    semaphore = _acquire_slot()
-    try:
-        structured = get_llm_client(run_name=run_name).with_structured_output(
-            schema,
-            method="json_schema",
-        )
-        return structured.invoke(
-            messages,
-            config={
-                "run_name": run_name,
-                "metadata": {
-                    "prompt_name": run_name,
-                    "prompt_version": prompt_version,
-                    "model_profile": _profile_for_run(run_name),
-                    "structured_output": "json_schema",
-                },
-            },
-        )
-    finally:
-        if semaphore is not None:
-            llm_inflight.dec()
-            semaphore.release()
-
-
 def _acquire_slot() -> threading.BoundedSemaphore | None:
     semaphore = _slots
     if semaphore is not None:
@@ -140,38 +104,6 @@ def invoke_llm(
                 "metadata": {
                     "prompt_name": run_name,
                     "prompt_version": prompt_version,
-                    "model_profile": _profile_for_run(run_name),
-                },
-            },
-        )
-    finally:
-        if semaphore is not None:
-            llm_inflight.dec()
-            semaphore.release()
-
-
-async def ainvoke_private_llm(
-    messages: Sequence[BaseMessage],
-    *,
-    run_name: str,
-    prompt_version: str = "v1",
-) -> Any:
-    """Invoke without inherited callbacks.
-
-    This isolates parent Runnable callbacks only. Model-local or globally configured
-    tracing remains the responsibility of the model/provider configuration.
-    """
-    semaphore = await __import__("asyncio").to_thread(_acquire_slot)
-    try:
-        return await get_llm_client(run_name=run_name).ainvoke(
-            messages,
-            config={
-                "run_name": run_name,
-                "callbacks": [],
-                "metadata": {
-                    "prompt_name": run_name,
-                    "prompt_version": prompt_version,
-                    "content_capture": False,
                     "model_profile": _profile_for_run(run_name),
                 },
             },

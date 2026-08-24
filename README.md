@@ -15,8 +15,6 @@ FastAPI + LangGraph 的模块化单体，面向移联电信与商城客服。MyS
 - 四层记忆、20-turn + 增量阈值异步摘要、类型化 TTL、Qdrant 删除 outbox。
 - Prometheus `/metrics`、Langfuse、可回放评测 Harness、tau2 adapter、shadow/canary 稳定用户桶。
 
-旧动态开户 Skill/registry/selector/runtime 已退出生产工作流；运行时不会加载或调用它们。
-
 ## 主工作流
 
 ```text
@@ -112,4 +110,4 @@ python scripts/seed_demo_business_data.py --apply  # 写入 .env 配置的 MySQL
 
 治理审计、退款、退换货和变更历史不会被伪造，只由实际应用动作生成。
 
-`evaluation/fixtures/smoke_cases.json` 提供首批路由、工具序列、确认与越权用例。`EvaluationHarness` 支持确定性断言，可选 Judge 只评价回复质量，不能替代权限、状态或终态断言。生产放量和故障演练见 [docs/operations_v1.md](docs/operations_v1.md)。
+`evaluation/fixtures/smoke_cases.json` 提供首批路由、工具序列、确认与越权用例。`EvaluationHarness` 支持确定性断言，可选 Judge 只评价回复质量，不能替代权限、状态或终态断言。

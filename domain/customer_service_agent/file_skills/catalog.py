@@ -150,8 +150,3 @@ def get_catalog() -> FileSkillCatalog:
     if _catalog is None:
         raise RuntimeError("file skill catalog is not initialized")
     return _catalog
-
-
-def reset_catalog() -> None:
-    global _catalog
-    _catalog = None

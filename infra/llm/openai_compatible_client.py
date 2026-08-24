@@ -6,17 +6,6 @@ from pkg.config.settings import Settings
 from domain.shared.llm.llm_service import ModelProfile
 
 
-def create_chat_model(settings: Settings) -> ChatOpenAI:
-    return ChatOpenAI(
-        api_key=settings.qwen_api_key or "missing-qwen-api-key",
-        base_url=settings.qwen_base_url,
-        model=settings.qwen_model,
-        temperature=0,
-        timeout=30,
-        max_retries=1,
-    )
-
-
 def create_profile_chat_model(settings: Settings, profile: ModelProfile) -> ChatOpenAI:
     return ChatOpenAI(
         api_key=settings.qwen_api_key or "missing-qwen-api-key",

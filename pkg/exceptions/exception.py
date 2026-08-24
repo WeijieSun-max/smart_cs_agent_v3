@@ -34,12 +34,6 @@ class UnsafeInputError(ServiceError):
     safe_message = "输入包含敏感个人信息，请脱敏后重试。"
 
 
-class StructuredOutputError(ServiceError):
-    code = "model.invalid_output"
-    status_code = 502
-    safe_message = "模型返回格式无效，请稍后重试。"
-
-
 class ToolValidationError(ServiceError):
     code = "tool.validation"
     status_code = 422

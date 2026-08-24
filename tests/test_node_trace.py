@@ -3,8 +3,6 @@ from __future__ import annotations
 import asyncio
 import json
 
-import pytest
-
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from application.customer_service import agent_run_service, chat_service
@@ -174,105 +172,6 @@ def test_node_trace_recorder_uses_metadata_fallback_and_redacts_errors() -> None
     assert "secretvalue123" not in failed[0]["data"]["error"]["message"]
 
 
-def test_dynamic_skill_model_trace_is_fully_redacted() -> None:
-    recorder = NodeTraceRecorder("turn-private")
-    recorder.consume(
-        _node_event(
-            "on_chain_start",
-            "node-private",
-            "dynamic_skill_agent_node",
-            {"raw_query": "open an account"},
-        )
-    )
-    started = recorder.consume(
-        {
-            "event": "on_chat_model_start",
-            "name": "ChatOpenAI",
-            "run_id": "model-private",
-            "metadata": {"langgraph_node": "dynamic_skill_agent_node"},
-            "parent_ids": ["node-private"],
-            "data": {
-                "input": {
-                    "messages": [[HumanMessage(content="raw-profile-value")]]
-                }
-            },
-        }
-    )
-    ended = recorder.consume(
-        {
-            "event": "on_chat_model_end",
-            "name": "ChatOpenAI",
-            "run_id": "model-private",
-            "metadata": {"langgraph_node": "dynamic_skill_agent_node"},
-            "parent_ids": ["node-private"],
-            "data": {"output": AIMessage(content="raw-observation-value")},
-        }
-    )
-
-    assert "raw-profile-value" not in repr(started)
-    assert "raw-observation-value" not in repr(ended)
-    assert started["data"]["prompt"] == {
-        "redacted": True,
-        "reason": "dynamic_skill_payload",
-    }
-    assert ended["data"]["response"] == {
-        "redacted": True,
-        "reason": "dynamic_skill_payload",
-    }
-
-
-def test_dynamic_skill_node_end_is_an_entire_fixed_summary() -> None:
-    recorder = NodeTraceRecorder("turn-safe-output")
-    recorder.consume(
-        _node_event(
-            "on_chain_start", "node-safe-output", "dynamic_skill_agent_node", {}
-        )
-    )
-    ended = recorder.consume(
-        _node_event(
-            "on_chain_end",
-            "node-safe-output",
-            "dynamic_skill_agent_node",
-            {
-                "skill_selection": {
-                    "selected_skill": "onboarding_material_check",
-                    "confidence": 0.9,
-                    "reason": "must-not-trace",
-                },
-                "skill_result": {
-                    "status": "completed",
-                    "skill_name": "onboarding_material_check",
-                    "response": "must-not-trace",
-                    "tool_calls": [
-                        {
-                            "tool_name": "user_profile",
-                            "success": True,
-                            "arguments": {"secret": "must-not-trace"},
-                        }
-                    ],
-                    "budget_usage": {"runtime_llm_decisions": 1, "tool_calls": 1},
-                },
-                "sub_results": {"dynamic_skill_agent": "must-not-trace"},
-                "unknown": [{"response": "must-not-trace"}],
-            },
-        )
-    )
-    assert "must-not-trace" not in repr(ended)
-    assert set(ended["data"]["output"]) == {"skill_selection", "skill_result"}
-    assert ended["data"]["output"]["skill_result"]["tool_calls"] == [
-        {"tool_name": "user_profile", "success": True}
-    ]
-
-
-@pytest.mark.parametrize("source", [None, [], {"event": []}, {"event": "on_custom_event", "name": []}, {"event": "on_custom_event", "name": "skill_completed", "data": []}, {"event": "on_custom_event", "name": "skill_completed", "data": {"duration_ms": 10 ** 10_000}}])
-def test_skill_sse_sanitizer_never_raises_for_wrong_exact_types(source) -> None:
-    result = chat_service._safe_skill_sse_event(source)
-    if type(source) is dict and type(source.get("data")) is dict:
-        assert result == {"type": "skill_event", "event": "skill_completed"}
-    else:
-        assert result is None
-
-
 def test_stream_emits_live_node_trace_without_adding_raw_data_to_agent_steps(monkeypatch) -> None:
     class Graph:
         async def astream_events(self, *_args, **_kwargs):
@@ -338,64 +237,3 @@ def test_stream_emits_live_node_trace_without_adding_raw_data_to_agent_steps(mon
     assert traces[1]["data"]["prompt"]["messages"][0][0]["content"] == "full system prompt"
     assert traces[2]["data"]["response"]["content"] == "raw model response"
     assert all("input" not in step and "output" not in step for step in run.steps)
-
-
-def test_stream_forwards_only_rebuilt_safe_skill_event_fields(monkeypatch) -> None:
-    class Graph:
-        async def astream_events(self, *_args, **_kwargs):
-            yield {
-                "event": "on_custom_event",
-                "name": "skill_tool_end",
-                "data": {
-                    "skill_name": "onboarding_material_check",
-                    "tool_name": "user_profile",
-                    "status": "success",
-                    "duration_ms": 12,
-                    "arguments": {"user_id": "must-not-stream"},
-                    "query": "must-not-stream",
-                    "source": "must-not-stream",
-                },
-            }
-            yield _node_event(
-                "on_chain_start", "node-safe", "response_synthesizer_node", {}
-            )
-            yield _node_event(
-                "on_chain_end",
-                "node-safe",
-                "response_synthesizer_node",
-                {"final_response": "done"},
-            )
-
-    class Memory:
-        def add_message(self, *_args) -> None:
-            return None
-
-    async def collect() -> list[dict]:
-        turn = create_turn_trace("user-safe", "session-safe")
-        run = AgentRun(session_id="session-safe", turn_id=turn.turn_id)
-        payloads = []
-        async for chunk in chat_service._generate_stream_events_admitted(
-            Graph(), {"raw_query": "private"}, "session-safe", "user-safe", turn, run
-        ):
-            if chunk.startswith("data:{"):
-                payloads.append(json.loads(chunk.removeprefix("data:").strip()))
-        return payloads
-
-    monkeypatch.setattr(chat_service, "_build_graph_config", lambda *_args, **_kwargs: {})
-    monkeypatch.setattr(chat_service.short_term_memory_service, "get_service", lambda: Memory())
-    monkeypatch.setattr(agent_run_service.registry, "_persist", lambda *_args, **_kwargs: None)
-
-    skill_events = [
-        event for event in asyncio.run(collect()) if event["type"] == "skill_event"
-    ]
-    assert skill_events == [
-        {
-            "type": "skill_event",
-            "event": "skill_tool_end",
-            "skill_name": "onboarding_material_check",
-            "tool_name": "user_profile",
-            "status": "success",
-            "duration_ms": 12.0,
-        }
-    ]
-    assert "must-not-stream" not in repr(skill_events)

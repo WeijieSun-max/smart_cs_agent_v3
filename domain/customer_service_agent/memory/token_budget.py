@@ -2,18 +2,13 @@ from __future__ import annotations
 
 import math
 import re
-from typing import Protocol, Sequence
+from typing import Sequence
 
 from domain.customer_service_agent.memory.models import (
     ConversationMemoryMessage,
     MemoryPacket,
     MemoryReference,
 )
-
-
-class TokenEstimator(Protocol):
-    def count(self, text: str) -> int:
-        pass
 
 
 class ConservativeTokenEstimator:

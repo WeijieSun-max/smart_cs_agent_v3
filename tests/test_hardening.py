@@ -18,7 +18,6 @@ from domain.customer_service_agent.tools import mcp_server as mcp_server_module
 from domain.customer_service_agent.tools.mcp_server import MCPToolServer
 from domain.customer_service_agent.workflow.nodes import compliance_checker_node
 from domain.customer_service_agent.workflow.nodes.history_fusion_node import history_fusion_node
-from infra.customer_service.ticket_repository import InMemoryTicketRepository
 from infra.knowledge.local_knowledge_store import LocalKnowledgeStore
 from infra.memory.persistent_conversation_memory import PersistentConversationMemory
 from infra.memory.mysql_conversation_archive import MySQLConversationArchive
@@ -26,11 +25,9 @@ from infra.memory.short_term_memory import RedisShortTermMemory
 from pkg.exceptions.exception import (
     RequestConflictError,
     StorageOperationError,
-    ToolValidationError,
     UnsafeInputError,
 )
 from pkg.exceptions.exception import handle_global_exception
-from pkg.security import get_local_user_id
 from tests.test_persistent_memory import FakeArchive
 
 
@@ -181,20 +178,6 @@ def test_partial_cache_cannot_shadow_complete_archive_history() -> None:
         "message-2",
         "message-3",
     ]
-
-
-def test_ticket_create_is_idempotent_and_status_transitions_are_validated() -> None:
-    repository = InMemoryTicketRepository()
-    first = repository.create("refund", "medium", "Refund", "Please review", "spoofed", "turn-1:create")
-    second = repository.create("refund", "medium", "Refund", "Please review", "another", "turn-1:create")
-
-    assert first["ticket_id"] == second["ticket_id"]
-    assert first["user_id"] == get_local_user_id()
-    assert len(first["ticket_id"]) == len("TK-") + 32
-    with pytest.raises(ToolValidationError):
-        repository.update_status(first["ticket_id"], "resolved")
-    processing = repository.update_status(first["ticket_id"], "processing")
-    assert processing is not None and processing["status"] == "processing"
 
 
 class RerankingEmbedding:

@@ -23,7 +23,8 @@ class ThreadIdentity:
         user = self.user_id or "anonymous"
         return f"{user}:{self.session_id}"
 
-
+# LangGraph 的 checkpoint 是按线程保存状态的。
+# LangGraph 可以通过同一个 threadid 恢复之前的状态。
 class CheckpointSaverService:
     def __init__(self, checkpointer: BaseCheckpointSaver):
         self._checkpointer = checkpointer
