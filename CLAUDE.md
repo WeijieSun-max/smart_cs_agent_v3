@@ -1,0 +1,85 @@
+# CLAUDE.md
+
+This file is the developer guide for the telecom/retail customer-service platform.
+
+## Commands
+
+- Shared Python: `D:\python\agentProject\.venv\Scripts\python.exe`
+- Install: `python -m pip install -r requirements.txt`
+- API: `python main.py`
+- Tests: `python -m pytest tests`
+- Evaluation smoke suite: `python -m evaluation.harness evaluation/fixtures/smoke_cases.json`
+- Frontend checks (from `frontend/`): `npm run lint`, `npm run build`
+
+Runtime configuration comes from the project-root `.env`. Never print or commit it; use `.env.example` for placeholders.
+
+## Runtime configuration
+
+- All LLM profiles use OpenAI-compatible Qwen chat endpoints. Configure `QWEN_API_KEY`, `QWEN_BASE_URL`, `QWEN_MODEL`, and optional per-node `QWEN_*_MODEL` / `QWEN_*_BASE_URL` overrides.
+- MySQL is authoritative for users, telecom/retail business data, governed actions, audit receipts, conversation archives, memories, and LangGraph checkpoints.
+- Redis is an optional recent-message cache; Qdrant is an optional rebuildable semantic index.
+- The frontend supplies `user_id`. A trusted proxy identity header is accepted only from configured proxy networks.
+- Production authentication and header sanitization belong at the future Nginx/auth gateway boundary.
+
+## Architecture
+
+- `adapter/web/`: FastAPI routes, schemas, middleware, SSE transport.
+- `application/customer_service/`: chat admission, session ownership, governed-action reconciliation.
+- `domain/customer_service_agent/`: LangGraph workflow, file-Skill catalog, MCP-style tool contracts.
+- `domain/business/`: typed telecom/retail entities, ownership rules, state transitions.
+- `domain/action_governance/`: proposal, confirmation, immutable digest, revalidation, idempotent execution, receipt.
+- `domain/shared/`: LLM and checkpoint service holders.
+- `infra/`: Qwen gateway, MySQL stores/checkpoints/migrations, RAG, resilience, optional Redis/Qdrant.
+- `pkg/`: settings, security, telemetry, logging, exceptions.
+
+## Request flow
+
+```text
+request identity -> session ownership -> per-user admission
+  -> history fusion -> supervisor
+  -> typed task plan -> read tools / grounded RAG / write proposal
+  -> mandatory compliance -> response synthesis -> SSE
+```
+
+The supervisor handles deterministic multi-domain routing and typed task plans. Independent read tools may run in parallel. Business writes never run directly from chat planning: they become governed proposals and require a separate confirmation request.
+
+The final compliance node is structurally unavoidable. Device troubleshooting uses RAG documents only; do not add a device-capability adapter or invent live device state.
+
+## Skill system
+
+Production Skills are loaded only from `SKILL.md` files below the configured Skill root.
+
+- Startup reads frontmatter and hashes only, validates tool allowlists/effects/agent types, and freezes the catalog.
+- Instructions and referenced files are loaded progressively when a Skill is selected.
+- Do not restore the deleted dynamic-onboarding registry/runtime.
+- The initial telecom Skill is `skills/telecom/plan-recommendation/SKILL.md`. It recommends plans from usage and plan data; it never changes a plan.
+
+## Tools and writes
+
+Tool definitions include version, domain, capabilities, allowed agent types, risk, side-effect, idempotency, confirmation, and parallel-safety metadata.
+
+- Reads must enforce `user_id` ownership in the storage query.
+- Every business write must be idempotent and declare `confirmation_policy=always`.
+- Raw `POST /api/tools/call` execution is disabled to prevent governance bypass.
+- Writes use `POST /api/actions/propose`, then `POST /api/actions/{action_id}/decision`.
+- Proposal and confirmation both verify that the user exists and is active.
+- Confirmation cannot alter arguments. Tool version, schema, resource version, and immutable digest are revalidated before execution.
+
+## Database and migrations
+
+`migrations/001_telecom_retail_platform.sql` defines the first complete schema. It has already been applied in development and its checksum is tracked, so never edit it after deployment. Add numbered migrations such as `002_*.sql` for future changes.
+
+Run all ownership-sensitive queries with both resource ID and `user_id`. Keep state-changing operations transactional and write audit/history records in the same transaction where possible.
+
+## Security and reliability
+
+- Never expose credentials or real `.env` values.
+- Treat a body `user_id` as caller context, not authentication, until the proxy/auth layer is deployed.
+- Do not let a trusted identity header through from arbitrary source IPs.
+- Preserve the bounded per-user queue, global LLM concurrency limit, circuit breakers, action reconciliation, and Prometheus instrumentation.
+- Keep MySQL as the source of truth; optional caches and vector indexes must degrade safely.
+
+## Verification baseline
+
+Before handoff, run the complete backend test suite and frontend lint/build. The deterministic evaluation harness validates task trajectory and final state; optional model-judge scoring supplements but never replaces deterministic assertions.
+

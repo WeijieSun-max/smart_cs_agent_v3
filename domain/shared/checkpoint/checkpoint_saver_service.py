@@ -1,0 +1,49 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Optional
+
+from langgraph.checkpoint.base import BaseCheckpointSaver
+
+# @dataclass(frozen=True) 这是 Python 的数据类写法。它会自动生成 __init__ 等方法，例如你可以这样创建对象
+# identity = ThreadIdentity(user_id="user001", session_id="chat123") 表示这个对象不能再修改
+# identity.user_id = "user002"  # 会报错
+@dataclass(frozen=True)
+class ThreadIdentity:
+    """根据user_id + session_id
+    生成一个唯一的线程ID，确保每个用户会话都有独立的检查点保存环境。
+
+    这个 thread_id 会传给 LangGraph，用来区分不同用户、不同会话的工作流状态。
+    """
+    user_id: Optional[str]
+    session_id: str
+
+    @property
+    def thread_id(self) -> str:
+        user = self.user_id or "anonymous"
+        return f"{user}:{self.session_id}"
+
+
+class CheckpointSaverService:
+    def __init__(self, checkpointer: BaseCheckpointSaver):
+        self._checkpointer = checkpointer
+
+    def get_checkpointer(self) -> BaseCheckpointSaver:
+        return self._checkpointer
+
+    @staticmethod
+    def get_thread_id(user_id: Optional[str], session_id: str) -> str:
+        return ThreadIdentity(user_id=user_id, session_id=session_id).thread_id
+
+    def clear_thread(self, user_id: Optional[str], session_id: str) -> None:
+        delete_thread = getattr(self._checkpointer, "delete_thread", None)
+        if callable(delete_thread):
+            delete_thread(self.get_thread_id(user_id, session_id))
+
+# 内存 checkpoint，所以服务重启后 checkpoint 会丢失
+instance: Optional[CheckpointSaverService] = None
+
+
+def initialize_service(checkpointer: BaseCheckpointSaver) -> None:
+    global instance
+    instance = CheckpointSaverService(checkpointer=checkpointer)

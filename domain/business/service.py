@@ -1,0 +1,184 @@
+from __future__ import annotations
+
+import math
+from decimal import Decimal, ROUND_HALF_UP
+from typing import Any
+
+from pkg.exceptions.exception import ServiceError, StorageUnavailableError
+
+from .models import PlanComparison, UsageProfile
+from .store import BusinessStore
+
+
+class UserNotActiveError(ServiceError):
+    code = "identity.user_not_active"
+    status_code = 403
+    safe_message = "当前用户不存在或不可用，不提供该业务服务。"
+
+
+class ResourceNotFoundError(ServiceError):
+    code = "business.resource_not_found"
+    status_code = 404
+    safe_message = "未找到属于当前用户的业务资源。"
+
+
+class BusinessService:
+    def __init__(self, store: BusinessStore):
+        self.store = store
+
+    def require_available(self) -> None:
+        if not self.store.available:
+            raise StorageUnavailableError()
+
+    def require_active_user(self, user_id: str) -> None:
+        self.require_available()
+        if not self.store.user_is_active(user_id):
+            raise UserNotActiveError()
+
+    def resolve_line(self, user_id: str, line_id: str | None = None) -> dict[str, Any]:
+        self.require_active_user(user_id)
+        if line_id:
+            line = self.store.get_owned("lines", line_id, user_id)
+            if line is None:
+                raise ResourceNotFoundError()
+            return line
+        lines = self.store.list_owned("lines", user_id, status="active")
+        if len(lines) != 1:
+            raise ResourceNotFoundError()
+        return lines[0]
+
+    def current_plan(self, user_id: str, line_id: str | None = None) -> dict[str, Any]:
+        line = self.resolve_line(user_id, line_id)
+        plans = self.store.list_public("plans", status="active")
+        plan = next((item for item in plans if item.get("plan_id") == line.get("current_plan_id")), None)
+        if plan is None:
+            raise ResourceNotFoundError()
+        return {"line_id": line["line_id"], "line_version": line["version"], **plan}
+
+    def usage_profile(self, user_id: str, line_id: str | None = None) -> UsageProfile:
+        line = self.resolve_line(user_id, line_id)
+        cycles = sorted(
+            self.store.list_owned("usage_cycles", user_id, line_id=line["line_id"]),
+            key=lambda item: str(item.get("cycle_start", "")),
+            reverse=True,
+        )
+        completed = [item for item in cycles if not item.get("current")][:3]
+        current = next((item for item in cycles if item.get("current")), None)
+        data_values = [int(item.get("used_data_mb", 0)) for item in completed]
+        voice_values = [int(item.get("used_voice_minutes", 0)) for item in completed]
+        projected_data = _project(current, "used_data_mb")
+        projected_voice = _project(current, "used_voice_minutes")
+        usable = len(completed)
+        quality = "insufficient" if usable == 0 else "low_confidence" if usable == 1 else "normal_confidence"
+        peak_data = max([*data_values, projected_data], default=0)
+        peak_voice = max([*voice_values, projected_voice], default=0)
+        return UsageProfile(
+            line_id=line["line_id"],
+            usable_cycles=usable,
+            analysis_period=f"最近{usable}个完整账期" + ("及当前账期预测" if current else ""),
+            data_quality=quality,
+            average_data_mb=_average(data_values),
+            peak_data_mb=peak_data,
+            projected_data_mb=projected_data,
+            recommended_data_mb=math.ceil(peak_data * 1.15),
+            average_voice_minutes=_average(voice_values),
+            peak_voice_minutes=peak_voice,
+            projected_voice_minutes=projected_voice,
+            recommended_voice_minutes=math.ceil(peak_voice * 1.10),
+            refuel_count=sum(int(item.get("refuel_count", 0)) for item in cycles[:3]),
+        )
+
+    def list_plans(self, user_id: str, line_id: str | None = None) -> list[dict[str, Any]]:
+        self.resolve_line(user_id, line_id)
+        return self.store.list_public("plans", status="active")
+
+    def compare_plans(self, user_id: str, line_id: str | None, candidate_plan_ids: list[str]) -> list[dict[str, Any]]:
+        profile = self.usage_profile(user_id, line_id)
+        plans = [item for item in self.list_plans(user_id, line_id) if item.get("plan_id") in set(candidate_plan_ids)]
+        comparisons: list[PlanComparison] = []
+        for plan in plans:
+            data_limit = int(plan.get("data_limit_mb", 0))
+            voice_limit = int(plan.get("included_voice_minutes", 0))
+            data_short = 0 if plan.get("data_unlimited") else max(0, profile.recommended_data_mb - data_limit)
+            voice_short = 0 if plan.get("voice_unlimited") else max(0, profile.recommended_voice_minutes - voice_limit)
+            data_cost = (Decimal(math.ceil(data_short / 1024)) * Decimal(str(plan.get("refuel_price_per_gb", 0)))) if data_short else Decimal("0")
+            voice_cost = Decimal(voice_short) * Decimal(str(plan.get("voice_overage_price_per_minute", 0)))
+            price = Decimal(str(plan["monthly_price"]))
+            comparisons.append(PlanComparison(
+                plan_id=str(plan["plan_id"]), name=str(plan["name"]), eligible=True,
+                monthly_price=price,
+                expected_monthly_cost=(price + data_cost + voice_cost).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
+                meets_data_need=data_short == 0,
+                meets_voice_need=voice_short == 0,
+                data_buffer_mb=10**12 if plan.get("data_unlimited") else data_limit - profile.recommended_data_mb,
+                voice_buffer_minutes=10**9 if plan.get("voice_unlimited") else voice_limit - profile.recommended_voice_minutes,
+            ))
+        for left in comparisons:
+            left.dominated = any(
+                right.plan_id != left.plan_id
+                and right.expected_monthly_cost <= left.expected_monthly_cost
+                and right.data_buffer_mb >= left.data_buffer_mb
+                and right.voice_buffer_minutes >= left.voice_buffer_minutes
+                and (right.expected_monthly_cost < left.expected_monthly_cost or right.data_buffer_mb > left.data_buffer_mb or right.voice_buffer_minutes > left.voice_buffer_minutes)
+                for right in comparisons
+            )
+        return [item.model_dump(mode="json") for item in sorted(comparisons, key=lambda item: (item.dominated, item.expected_monthly_cost))]
+
+    def get_order(self, user_id: str, order_id: str) -> dict[str, Any]:
+        self.require_active_user(user_id)
+        order = self.store.get_owned("orders", order_id, user_id)
+        if order is None:
+            raise ResourceNotFoundError()
+        return order
+
+    def list_orders(self, user_id: str, status: str | None = None) -> list[dict[str, Any]]:
+        self.require_active_user(user_id)
+        return self.store.list_owned("orders", user_id, status=status)
+
+    def list_products(self, query: str = "") -> list[dict[str, Any]]:
+        products = self.store.list_public("products", status="active")
+        if not query.strip():
+            return products
+        normalized = query.lower()
+        return [item for item in products if normalized in f"{item.get('name', '')} {item.get('description', '')}".lower()]
+
+    def list_addresses(self,user_id: str) -> list[dict[str,Any]]:
+        self.require_active_user(user_id)
+        return self.store.list_owned("addresses",user_id,status="active")
+
+    def list_payment_methods(self,user_id: str) -> list[dict[str,Any]]:
+        self.require_active_user(user_id)
+        return self.store.list_owned("payment_methods",user_id,status="active")
+
+    def execute_action(self, tool_name: str, arguments: dict[str, Any], user_id: str, action_id: str, idempotency_key: str) -> dict[str, Any]:
+        self.require_active_user(user_id)
+        return self.store.execute_action(tool_name, arguments, user_id, action_id, idempotency_key)
+
+
+def _average(values: list[int]) -> int:
+    return round(sum(values) / len(values)) if values else 0
+
+
+def _project(current: dict[str, Any] | None, field: str) -> int:
+    if not current:
+        return 0
+    elapsed = max(1, int(current.get("elapsed_days", 0)))
+    total = max(elapsed, int(current.get("cycle_days", 30)))
+    if elapsed < 7:
+        return int(current.get(field, 0))
+    return math.ceil(int(current.get(field, 0)) * total / elapsed)
+
+
+_service: BusinessService | None = None
+
+
+def initialize_service(store: BusinessStore) -> BusinessService:
+    global _service
+    _service = BusinessService(store)
+    return _service
+
+
+def get_service() -> BusinessService:
+    if _service is None:
+        raise RuntimeError("business service is not initialized")
+    return _service
