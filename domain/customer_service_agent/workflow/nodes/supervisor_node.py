@@ -78,6 +78,8 @@ def supervisor_node_sync(state: ChatState) -> dict[str, Any]:
     return asyncio.run(supervisor_node(state))
 
 
+# 把“这一次请求是谁发起的、属于哪个会话、是哪一轮、身份可信度如何”这些身份信息，
+# 从庞大的 ChatState 里提取出来，形成一个独立、受约束、不可随意修改的身份上下文对象。
 def _identity(state: ChatState) -> RequestIdentityContext:
     return RequestIdentityContext(
         user_id=state.get("user_id") or "anonymous",
