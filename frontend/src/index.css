@@ -1,0 +1,54 @@
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;650&family=JetBrains+Mono:wght@400;500&display=swap");
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 0 0% 99%;
+    --foreground: 240 6% 10%;
+    --card: 0 0% 100%;
+    --card-foreground: 240 6% 10%;
+    --primary: 221 83% 53%;
+    --primary-foreground: 0 0% 100%;
+    --muted: 240 5% 96%;
+    --muted-foreground: 240 4% 46%;
+    --accent: 221 83% 96%;
+    --accent-foreground: 221 83% 42%;
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 240 6% 90%;
+  }
+
+  .dark {
+    --background: 240 6% 6%;
+    --foreground: 240 5% 96%;
+    --card: 240 5% 8%;
+    --card-foreground: 240 5% 96%;
+    --primary: 217 91% 60%;
+    --primary-foreground: 0 0% 100%;
+    --muted: 240 4% 13%;
+    --muted-foreground: 240 5% 65%;
+    --accent: 221 60% 16%;
+    --accent-foreground: 217 91% 72%;
+    --destructive: 0 63% 46%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 240 4% 17%;
+  }
+
+  * { @apply border-border; }
+  html { @apply bg-background; }
+  body { @apply m-0 bg-background font-sans text-foreground antialiased; }
+  button, textarea, input { font: inherit; }
+  ::selection { @apply bg-primary/20; }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-thumb { @apply rounded-full bg-foreground/15; }
+}
+
+@layer components {
+  .surface-grid {
+    background-image: radial-gradient(hsl(var(--border)) 0.7px, transparent 0.7px);
+    background-size: 16px 16px;
+  }
+}
