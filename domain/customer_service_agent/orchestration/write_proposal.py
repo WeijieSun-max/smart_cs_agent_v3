@@ -5,6 +5,7 @@ import re
 
 from domain.action_governance import get_action_service
 from domain.customer_service_agent.orchestration.planner import extract_entities
+from domain.customer_service_agent.orchestration.retail_write_proposals import prepare_retail_write_proposal
 from domain.customer_service_agent.orchestration.router import WRITE_CAPABILITIES
 from domain.shared.identity import RequestIdentityContext
 
@@ -13,10 +14,12 @@ async def prepare_write_proposal(
     query: str,
     capability: str,
     identity: RequestIdentityContext,
+    *,
+    resolved_entities: dict[str, str] | None = None,
 ) -> str | None:
     if capability not in WRITE_CAPABILITIES:
         return None
-    entities = extract_entities(query)
+    entities = {**extract_entities(query), **(resolved_entities or {})}
     if capability == "plan_change":
         if not entities.get("line_id") or not entities.get("plan_id"):
             return "请提供目标 line_id 和 plan_id，我会先展示月租影响，再生成待确认操作。"
@@ -117,6 +120,9 @@ async def prepare_write_proposal(
             impact_summary=impact,
         )
         return _confirmation_text(action.impact_summary)
+    retail_proposal = await prepare_retail_write_proposal(query, capability, identity, entities)
+    if retail_proposal is not None:
+        return retail_proposal
     return "该操作需要明确的资源 ID 和变更参数。请在工作台填写后，系统会展示冻结的影响摘要并要求二次确认。"
 
 

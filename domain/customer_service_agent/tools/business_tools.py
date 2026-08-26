@@ -92,9 +92,26 @@ async def retail_get_order(order_id: str, _trusted_context: dict | None = None) 
     return await asyncio.to_thread(business_service.get_service().get_order,_user(_trusted_context),order_id)
 
 
+@server.register(name="retail_get_order_detail", description="查询属于当前用户的订单及商品明细", input_schema={"type":"object","properties":{"order_id":{"type":"string","minLength":1,"maxLength":26}},"required":["order_id"]}, category="retail", effect="read", supports_idempotency=False, domain="retail", capabilities=("order_resolution","order_query","request_return","request_exchange"), allowed_agent_types=("retail_agent",), parallel_safe=True)
+async def retail_get_order_detail(order_id: str, _trusted_context: dict | None = None) -> dict:
+    return await asyncio.to_thread(business_service.get_service().get_order_detail,_user(_trusted_context),order_id)
+
+
 @server.register(name="retail_list_orders", description="列出当前用户订单", input_schema={"type":"object","properties":{"status":{"type":"string","enum":["pending","processed","delivered","cancelled","return_requested","exchange_requested"]}}}, category="retail", effect="read", supports_idempotency=False, domain="retail", capabilities=("order_query",), allowed_agent_types=("retail_agent",), parallel_safe=True)
 async def retail_list_orders(status: str | None = None, _trusted_context: dict | None = None) -> list[dict]:
     return await asyncio.to_thread(business_service.get_service().list_orders,_user(_trusted_context),status)
+
+
+@server.register(name="retail_find_orders", description="按数据库中的购买时间、商品和状态查找当前用户订单候选", input_schema={"type":"object","properties":{"start_date":{"type":"string","format":"date"},"end_date":{"type":"string","format":"date"},"product_query":{"type":"string","maxLength":255},"status":{"type":"string","enum":["pending","processed","delivered","cancelled","return_requested","exchange_requested"]}},"additionalProperties":False}, category="retail", effect="read", supports_idempotency=False, domain="retail", capabilities=("order_resolution","order_query"), allowed_agent_types=("retail_agent",), parallel_safe=True)
+async def retail_find_orders(start_date: str | None = None, end_date: str | None = None, product_query: str = "", status: str | None = None, _trusted_context: dict | None = None) -> list[dict]:
+    return await asyncio.to_thread(
+        business_service.get_service().find_orders,
+        _user(_trusted_context),
+        start_date=start_date,
+        end_date=end_date,
+        product_query=product_query,
+        status=status,
+    )
 
 
 @server.register(name="retail_list_addresses",description="列出当前用户可用收货地址的脱敏信息",input_schema={"type":"object","properties":{}},category="retail",effect="read",supports_idempotency=False,domain="retail",capabilities=("address_query",),allowed_agent_types=("retail_agent",),parallel_safe=True)

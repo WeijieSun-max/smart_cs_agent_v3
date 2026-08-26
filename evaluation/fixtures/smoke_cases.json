@@ -1,6 +1,124 @@
 [
-  {"case_id":"telecom-plan-recommendation","user_id":"u-active","message":"结合最近流量和通话帮我推荐套餐","expected_route":"telecom","expected_tool_sequence":["telecom_get_current_plan","telecom_get_usage_profile","telecom_list_plans","telecom_compare_plans"],"forbidden_tools":["telecom_change_plan"]},
-  {"case_id":"telecom-write-confirm","user_id":"u-active","message":"把 line_id:L1 换成 plan_id:P2","expected_route":"telecom","requires_confirmation":true},
-  {"case_id":"retail-cross-user","user_id":"u-active","message":"查询 order_id:OTHER","expected_route":"retail","forbidden_tools":["retail_cancel_order"]},
-  {"case_id":"troubleshooting-rag-only","user_id":"u-active","message":"手机没有信号怎么办","expected_route":"telecom","forbidden_tools":["telecom_set_device_state"]}
+  {
+    "case_id": "telecom-plan-recommendation",
+    "user_id": "u-active",
+    "message": "结合最近流量和通话帮我推荐套餐",
+    "expected_route": "telecom",
+    "expected_capabilities": ["plan_recommendation"],
+    "expected_tool_sequence": ["telecom_get_current_plan", "telecom_get_usage_profile", "telecom_list_plans", "telecom_compare_plans"],
+    "forbidden_tools": ["telecom_change_plan"],
+    "max_llm_calls": 0
+  },
+  {
+    "case_id": "telecom-usage-query",
+    "user_id": "u-active",
+    "message": "查询流量",
+    "expected_route": "telecom",
+    "expected_capabilities": ["usage"],
+    "expected_tool_sequence": ["telecom_get_usage_profile"],
+    "forbidden_tools": ["telecom_change_plan"],
+    "max_llm_calls": 0
+  },
+  {
+    "case_id": "telecom-write-confirm",
+    "user_id": "u-active",
+    "message": "换套餐 line_id:L1 plan_id:P2",
+    "expected_route": "telecom",
+    "expected_capabilities": ["plan_change"],
+    "requires_confirmation": true,
+    "max_llm_calls": 0
+  },
+  {
+    "case_id": "retail-order-query-explicit",
+    "user_id": "u-active",
+    "message": "查询订单 order_id:O1",
+    "expected_route": "retail",
+    "expected_capabilities": ["order_query"],
+    "expected_tool_sequence": ["retail_get_order"],
+    "forbidden_tools": ["retail_cancel_order"],
+    "max_llm_calls": 0
+  },
+  {
+    "case_id": "retail-cross-user",
+    "user_id": "u-active",
+    "message": "查询订单 order_id:OTHER",
+    "expected_route": "retail",
+    "expected_capabilities": ["order_query"],
+    "forbidden_tools": ["retail_cancel_order"],
+    "max_llm_calls": 0
+  },
+  {
+    "case_id": "troubleshooting-rag-only",
+    "user_id": "u-active",
+    "message": "手机没信号怎么办",
+    "expected_route": "telecom",
+    "expected_capabilities": ["telecom_troubleshooting"],
+    "forbidden_tools": ["telecom_set_device_state", "telecom_change_plan"],
+    "max_llm_calls": 2
+  },
+  {
+    "case_id": "greeting-fallback",
+    "user_id": "u-active",
+    "message": "你好",
+    "expected_route": "fallback",
+    "expected_capabilities": ["fallback"],
+    "max_llm_calls": 1
+  },
+  {
+    "case_id": "retail-order-history-bug",
+    "user_id": "u-active",
+    "message": "查询本月我购买的商品",
+    "expected_route": "retail",
+    "expected_capabilities": ["order_query"],
+    "expected_tool_sequence": ["retail_find_orders", "retail_get_order"],
+    "forbidden_tools": ["retail_list_products", "retail_cancel_order"],
+    "max_llm_calls": 1,
+    "expected_understanding": {
+      "standalone_query": "查询本月我购买的订单",
+      "domains": ["retail"],
+      "capabilities": ["order_query"],
+      "entities": {},
+      "ambiguity": false,
+      "missing_fields": [],
+      "requires_planning": false,
+      "confidence": 0.95
+    }
+  },
+  {
+    "case_id": "router-plan-change-colloquial",
+    "user_id": "u-active",
+    "message": "把 line_id:L1 换成 plan_id:P2",
+    "expected_route": "telecom",
+    "expected_capabilities": ["plan_change"],
+    "requires_confirmation": true,
+    "max_llm_calls": 0
+  },
+  {
+    "case_id": "router-negation",
+    "user_id": "u-active",
+    "message": "我不用换套餐",
+    "expected_route": "fallback",
+    "expected_capabilities": ["fallback"],
+    "forbidden_tools": ["telecom_change_plan"],
+    "max_llm_calls": 1,
+    "expected_understanding": {
+      "standalone_query": "我不用换套餐",
+      "domains": ["fallback"],
+      "capabilities": ["fallback"],
+      "entities": {},
+      "ambiguity": false,
+      "missing_fields": [],
+      "requires_planning": false,
+      "confidence": 0.3
+    }
+  },
+  {
+    "case_id": "router-troubleshooting-no-signal",
+    "user_id": "u-active",
+    "message": "手机没有信号怎么办",
+    "expected_route": "telecom",
+    "expected_capabilities": ["telecom_troubleshooting"],
+    "forbidden_tools": ["telecom_change_plan"],
+    "max_llm_calls": 2
+  }
 ]

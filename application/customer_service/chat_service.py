@@ -10,6 +10,7 @@ from application.customer_service import agent_run_service
 from application.customer_service.admission import turn_admission
 from application.customer_service.node_trace import NodeTraceRecorder
 from application.customer_service.stream_events import (
+    cumulative_response_chunks as _cumulative_response_chunks,
     encode_sse as _encode_sse,
     generate_replay_events as _generate_replay_events,
 )
@@ -257,6 +258,9 @@ async def _generate_stream_events_admitted(graph, chat_state, session_id: str, u
                     compliance_passed = bool(output.get("compliance_passed", True))
                 if "final_response" in output:
                     final_response = output.get("final_response") or ""
+                    for cumulative in _cumulative_response_chunks(final_response):
+                        yield _encode_sse({"type": "message_delta", "content": cumulative})
+                        await asyncio.sleep(0)
                     yield _encode_sse({"type": "answer", "content": final_response})
 
             if final_response:

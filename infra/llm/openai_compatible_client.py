@@ -15,4 +15,5 @@ def create_profile_chat_model(settings: Settings, profile: ModelProfile) -> Chat
         max_tokens=profile.max_tokens,
         timeout=profile.timeout_seconds,
         max_retries=profile.max_retries,
+        extra_body={"enable_thinking": profile.enable_thinking},
     )

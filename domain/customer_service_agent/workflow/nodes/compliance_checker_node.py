@@ -39,7 +39,12 @@ class ComplianceDecision(BaseModel):
 
 def compliance_checker_node(state: ChatState) -> dict:
     content = _content_from_state(state)
-    result = full_check(content)
+    # 风险分级：确定性模板草稿（工具事实拼装）只走规则层（违禁词/PII 检测），
+    # 跳过 LLM 审查以省一次调用；LLM 生成的草稿（RAG/ReAct/合成）仍需规则 + LLM 双重审查。
+    if state.get("draft_source", "deterministic") == "llm":
+        result = full_check(content)
+    else:
+        result = rule_check(content)
     return _compliance_state_update(state, result)
 
 
@@ -91,6 +96,9 @@ def llm_check(content: str) -> ComplianceResult:
 
 
 def _content_from_state(state: ChatState) -> str:
+    draft = state.get("draft_response") or ""
+    if draft.strip():
+        return draft
     content = "\n".join(
         result
         for result in state.get("sub_results", {}).values()
@@ -109,6 +117,7 @@ def _compliance_state_update(state: ChatState, result: ComplianceResult) -> dict
             "suggestions": result.suggestions,
         },
         "sub_results": _masked_sub_results(state, result),
+        "draft_response": state.get("draft_response", "") if result.passed else result.sanitized_content,
         "current_agent": "compliance_checker",
         "node_logs": [f"合规审查完成：{result.risk_level}"],
     }

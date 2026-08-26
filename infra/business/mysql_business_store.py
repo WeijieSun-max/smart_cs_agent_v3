@@ -77,6 +77,50 @@ class MySQLBusinessStore:
             raise StorageOperationError()
         return [_normalize(row) for row in rows]
 
+    def list_order_candidates(self, user_id: str) -> list[dict[str, Any]]:
+        ok, rows = self._require().execute_query(
+            """SELECT o.*, i.order_item_id, i.product_id AS item_product_id,
+            i.variant_id AS item_variant_id, i.sku_snapshot, i.name_snapshot,
+            i.unit_price, i.quantity, i.returned_qty, i.exchanged_qty,
+            i.item_status, i.version AS item_version
+            FROM rt_orders o
+            LEFT JOIN rt_order_items i ON i.order_id=o.order_id
+            WHERE o.user_id=%s
+            ORDER BY o.placed_at DESC,o.order_id,i.order_item_id""",
+            (user_id,),
+        )
+        if not ok:
+            raise StorageOperationError()
+        grouped: dict[str, dict[str, Any]] = {}
+        item_fields = {
+            "order_item_id", "item_product_id", "item_variant_id", "sku_snapshot",
+            "name_snapshot", "unit_price", "quantity", "returned_qty",
+            "exchanged_qty", "item_status", "item_version",
+        }
+        for raw in rows:
+            row = _normalize(raw)
+            order_id = str(row["order_id"])
+            order = grouped.get(order_id)
+            if order is None:
+                order = {key: value for key, value in row.items() if key not in item_fields}
+                order["items"] = []
+                grouped[order_id] = order
+            if row.get("order_item_id"):
+                order["items"].append({
+                    "order_item_id": row["order_item_id"],
+                    "product_id": row.get("item_product_id"),
+                    "variant_id": row.get("item_variant_id"),
+                    "sku_snapshot": row.get("sku_snapshot"),
+                    "name_snapshot": row.get("name_snapshot"),
+                    "unit_price": row.get("unit_price"),
+                    "quantity": row.get("quantity"),
+                    "returned_qty": row.get("returned_qty"),
+                    "exchanged_qty": row.get("exchanged_qty"),
+                    "item_status": row.get("item_status"),
+                    "version": row.get("item_version"),
+                })
+        return list(grouped.values())
+
     def list_public(self, resource: str, **filters: Any) -> list[dict[str, Any]]:
         table = {"plans": "tc_plans", "products": "rt_products", "variants": "rt_product_variants"}.get(resource)
         if table is None:

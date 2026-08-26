@@ -47,6 +47,19 @@ _MEMORY_REFERENCE_PATTERN = re.compile(
     r"<<<MEMORY_REFERENCE_DATA>>>.*?<<<END_MEMORY_REFERENCE_DATA>>>",
     re.DOTALL,
 )
+_PRE_COMPLIANCE_CONTENT_NODES = frozenset({
+    "domain_dispatch_node",
+    "result_aggregator_node",
+    "response_writer_node",
+    "compliance_checker_node",
+    "execute",
+})
+
+
+def _trace_payload(node_name: str, value: Any) -> Any:
+    if node_name in _PRE_COMPLIANCE_CONTENT_NODES:
+        return {"_debug_redacted": "PRE_COMPLIANCE_CONTENT"}
+    return serialize_debug_value(value)
 
 
 def serialize_debug_value(value: Any, *, max_bytes: int = MAX_DEBUG_PAYLOAD_BYTES) -> Any:
@@ -283,7 +296,7 @@ class NodeTraceRecorder:
             "node_start",
             node_trace_id=node_trace_id,
             node_name=node_name,
-            data={"input": serialize_debug_value(raw_input)},
+            data={"input": _trace_payload(node_name, raw_input)},
         )
 
     def _start_model(self, event: dict[str, Any]) -> dict[str, Any] | None:
@@ -294,7 +307,7 @@ class NodeTraceRecorder:
         model_call_id = str(event.get("run_id"))
         self._model_owners[model_call_id] = node_trace_id
         raw_prompt = (event.get("data") or {}).get("input")
-        prompt = serialize_debug_value(raw_prompt)
+        prompt = _trace_payload(node_name, raw_prompt)
         return self._event(
             "llm_start",
             node_trace_id=node_trace_id,
@@ -316,7 +329,7 @@ class NodeTraceRecorder:
             if node_name is None:
                 return None
         raw_response = (event.get("data") or {}).get("output")
-        response = serialize_debug_value(raw_response)
+        response = _trace_payload(node_name, raw_response)
         return self._event(
             "llm_end",
             node_trace_id=node_trace_id,
@@ -336,7 +349,7 @@ class NodeTraceRecorder:
         for call_id in stale_model_calls:
             self._model_owners.pop(call_id, None)
         raw_output = (event.get("data") or {}).get("output")
-        output = serialize_debug_value(raw_output)
+        output = _trace_payload(node_name, raw_output)
         return self._event(
             "node_end",
             node_trace_id=node_trace_id,

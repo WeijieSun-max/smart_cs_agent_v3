@@ -24,7 +24,10 @@ class SessionOwnershipService:
         if not ok: raise StorageOperationError()
         if row and row["user_id"] != user_id: raise RequestConflictError()
         if not row:
-            ok,_=self.client.execute_update("INSERT INTO cs_sessions(session_id,user_id,status,version,created_at,updated_at) VALUES (%s,%s,'active',1,UTC_TIMESTAMP(6),UTC_TIMESTAMP(6))",(session_id,user_id))
+            ok,_=self.client.execute_update(
+                "INSERT INTO cs_sessions(session_id,user_id,title,agent_id,created_at,updated_at) VALUES (%s,%s,%s,%s,UTC_TIMESTAMP(6),UTC_TIMESTAMP(6))",
+                (session_id,user_id,"新会话","general"),
+            )
             if not ok:
                 ok,row=self.client.execute_query("SELECT user_id FROM cs_sessions WHERE session_id=%s",(session_id,),fetch_one=True)
                 if not ok or not row or row["user_id"] != user_id: raise RequestConflictError()

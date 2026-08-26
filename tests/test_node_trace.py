@@ -151,6 +151,44 @@ def test_node_trace_recorder_maps_node_and_multiple_model_calls() -> None:
     assert node_end["data"]["output"]["intent"] == "knowledge"
 
 
+def test_pre_compliance_trace_content_is_redacted() -> None:
+    recorder = NodeTraceRecorder("turn-safe")
+    started = recorder.consume(_node_event(
+        "on_chain_start",
+        "writer-node",
+        "response_writer_node",
+        {"task_results": {"T1": {"user_fragment": "unsafe draft"}}},
+    ))
+    model_started = recorder.consume({
+        "event": "on_chat_model_start",
+        "name": "ChatOpenAI",
+        "run_id": "writer-model",
+        "metadata": {"langgraph_node": "response_writer_node"},
+        "parent_ids": ["writer-node"],
+        "data": {"input": "unsafe draft"},
+    })
+    model_ended = recorder.consume({
+        "event": "on_chat_model_end",
+        "name": "ChatOpenAI",
+        "run_id": "writer-model",
+        "metadata": {"langgraph_node": "response_writer_node"},
+        "parent_ids": ["writer-node"],
+        "data": {"output": AIMessage(content="unsafe generated draft")},
+    })
+    ended = recorder.consume(_node_event(
+        "on_chain_end",
+        "writer-node",
+        "response_writer_node",
+        {"draft_response": "unsafe generated draft"},
+    ))
+
+    expected = {"_debug_redacted": "PRE_COMPLIANCE_CONTENT"}
+    assert started["data"]["input"] == expected
+    assert model_started["data"]["prompt"] == expected
+    assert model_ended["data"]["response"] == expected
+    assert ended["data"]["output"] == expected
+
+
 def test_node_trace_recorder_uses_metadata_fallback_and_redacts_errors() -> None:
     recorder = NodeTraceRecorder("turn-2")
     recorder.consume(_node_event("on_chain_start", "node-2", "compliance_checker_node", {"query": "refund"}))

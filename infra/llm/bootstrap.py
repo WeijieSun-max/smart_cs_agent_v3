@@ -45,21 +45,27 @@ def initialize_llm() -> None:
         for name, model in profile_models.items()
     }
     clients = {name: create_profile_chat_model(settings, profile) for name, profile in profiles.items()}
+    run_prefixes = {
+        "intent.": "fast_classifier",
+        "rag.query_rewrite": "query_rewriter",
+        "rag.": "response_writer",
+        "planner.": "task_planner",
+        "telecom.": "telecom_agent",
+        "retail.": "retail_agent",
+        "response.": "response_writer",
+        "fallback.": "response_writer",
+        "compliance.": "safety_guard",
+        "memory.": "memory",
+    }
     initialize_llm_profiles(
         clients,
-        run_prefixes={
-            "intent.": "fast_classifier",
-            "rag.query_rewrite": "query_rewriter",
-            "rag.": "response_writer",
-            "planner.": "task_planner",
-            "telecom.": "telecom_agent",
-            "retail.": "retail_agent",
-            "response.": "response_writer",
-            "fallback.": "response_writer",
-            "compliance.": "safety_guard",
-            "memory.": "memory",
-        },
+        run_prefixes=run_prefixes,
         max_concurrency=settings.llm_max_concurrency,
         queue_timeout_seconds=settings.llm_queue_timeout_seconds,
     )
-    logger.info("LLM module initialized with OpenAI-compatible profiles model={}", default_model)
+    resolved = {
+        name: (profile.model or default_model)
+        for name, profile in profiles.items()
+    }
+    logger.info("LLM module initialized default_model={} profiles={}", default_model, resolved)
+    logger.info("LLM run-prefix routing={}", run_prefixes)

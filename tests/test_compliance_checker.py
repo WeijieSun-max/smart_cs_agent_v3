@@ -24,7 +24,11 @@ def test_checker_uses_raw_query_when_sub_results_are_empty(monkeypatch):
 
     monkeypatch.setattr(compliance, "full_check", fake_full_check)
 
-    output = compliance.compliance_checker_node({"raw_query": "查询订单状态", "sub_results": {}})
+    output = compliance.compliance_checker_node({
+        "raw_query": "查询订单状态",
+        "sub_results": {},
+        "draft_source": "llm",
+    })
 
     assert checked["content"] == "查询订单状态"
     assert output["compliance_passed"] is True
@@ -44,6 +48,7 @@ def test_checker_masks_string_sub_results_when_blocked(monkeypatch):
             "answer": "手机号 13812345000",
             "metadata": {"phone": "13812345000"},
         },
+        "draft_source": "llm",
     })
 
     assert "13812345000" not in output["sub_results"]["answer"]

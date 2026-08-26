@@ -16,6 +16,7 @@ class BusinessStore(Protocol):
     def user_is_active(self, user_id: str) -> bool: ...
     def get_owned(self, resource: str, resource_id: str, user_id: str) -> dict[str, Any] | None: ...
     def list_owned(self, resource: str, user_id: str, **filters: Any) -> list[dict[str, Any]]: ...
+    def list_order_candidates(self, user_id: str) -> list[dict[str, Any]]: ...
     def list_public(self, resource: str, **filters: Any) -> list[dict[str, Any]]: ...
     def execute_action(self, tool_name: str, arguments: dict[str, Any], user_id: str, action_id: str, idempotency_key: str) -> dict[str, Any]: ...
     def create_pending(self, action: dict[str, Any]) -> dict[str, Any]: ...
@@ -48,6 +49,16 @@ class InMemoryBusinessStore:
 
     def list_owned(self, resource: str, user_id: str, **filters: Any) -> list[dict[str, Any]]:
         return [copy.deepcopy(row) for row in self._data.get(resource, []) if _owned(row, user_id, self._data) and _matches(row, filters)]
+
+    def list_order_candidates(self, user_id: str) -> list[dict[str, Any]]:
+        orders = self.list_owned("orders", user_id)
+        for order in orders:
+            order["items"] = [
+                copy.deepcopy(item)
+                for item in self._data.get("order_items", [])
+                if item.get("order_id") == order.get("order_id")
+            ]
+        return sorted(orders, key=lambda item: str(item.get("placed_at", "")), reverse=True)
 
     def list_public(self, resource: str, **filters: Any) -> list[dict[str, Any]]:
         return [copy.deepcopy(row) for row in self._data.get(resource, []) if _matches(row, filters)]

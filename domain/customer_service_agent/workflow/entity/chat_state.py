@@ -26,10 +26,16 @@ class ChatState(MessagesState):
     memory_packet: dict[str, Any] | None  # 长期记忆检索结果及其相关元数据。
     user_message_persisted: bool  # 当前用户消息是否已成功写入持久化存储，避免重复保存。
     context_text: str  # 工作流节点汇总、整理后供后续推理使用的文本上下文。
+    normalized_query: str  # 查询改写、指代消解后的独立问题；业务事实仍需由数据库验证。
+    query_understanding: dict[str, Any] | None  # 结构化领域、能力、实体、时间范围和歧义结果。
+    pending_action_handled: bool  # 本轮是否已由待确认操作门禁处理。
+    domain_agent_results: dict[str, list[dict[str, Any]]]  # Telecom/Retail 子图的结构化结果。
     intent: str | None  # 识别出的用户意图，用于路由到对应处理流程。
     sub_results: dict[str, Any]  # 子任务或子节点的中间处理结果集合。
     compliance_passed: bool  # 合规校验是否通过；决定是否允许正常输出。
     compliance_result: dict[str, Any]  # 合规校验的详细结果，例如风险类型和拦截原因。
+    draft_response: str  # AgentResult 聚合后的完整草稿，必须先合规再发送。
+    draft_source: str  # 草稿来源：deterministic（模板/工具事实）或 llm（RAG/ReAct/合成）。用于合规风险分级。
     final_response: str  # 工作流最终生成、准备返回给用户的回复。
     current_agent: str  # 当前正在执行或最近执行的智能体/节点名称。
     node_logs: Annotated[list[str], merge_node_logs]  # 节点执行日志；通过 merge_node_logs 进行累加或重置。
@@ -65,10 +71,16 @@ def create_chat_state(
         "user_message_persisted": user_message_persisted,
         "messages": [HumanMessage(content=query)],
         "context_text": "",
+        "normalized_query": query,
+        "query_understanding": None,
+        "pending_action_handled": False,
+        "domain_agent_results": {},
         "intent": None,
         "sub_results": {},
         "compliance_passed": True,
         "compliance_result": {},
+        "draft_response": "",
+        "draft_source": "deterministic",
         "final_response": "",
         "current_agent": "",
         "node_logs": [],

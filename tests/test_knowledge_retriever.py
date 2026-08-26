@@ -70,3 +70,61 @@ def test_knowledge_retriever_builds_grounded_answer_and_citations(monkeypatch) -
         "version": "1.0.0",
         "document_id": "doc-1",
     }]
+
+
+def test_grounded_answer_is_cached_for_standalone_query(monkeypatch) -> None:
+    from domain.customer_service_agent.retrieval.answer_cache import rag_answer_cache
+
+    rag_answer_cache.clear()
+    docs = [{
+        "id": "doc-cache",
+        "source": "s",
+        "content": "手机没有信号时检查 SIM 卡。",
+        "metadata": {"version": "1.0.0"},
+    }]
+    store = FakeKnowledgeStore(docs)
+    monkeypatch.setattr(knowledge_retriever.knowledge_service, "get_service", lambda: store)
+    calls = {"n": 0}
+
+    def invoke(messages, **kwargs):
+        calls["n"] += 1
+        return SimpleNamespace(content="请检查 SIM 卡。[1]")
+
+    monkeypatch.setattr(knowledge_retriever, "invoke_llm", invoke)
+    state = create_chat_state("user-1", "session-1", "手机没有信号")
+
+    first = asyncio.run(knowledge_retriever.retrieve_grounded_answer(state, "telecom", "telecom_troubleshooting"))
+    second = asyncio.run(knowledge_retriever.retrieve_grounded_answer(state, "telecom", "telecom_troubleshooting"))
+
+    assert calls["n"] == 1
+    assert first["sub_results"]["supervisor"] == second["sub_results"]["supervisor"] == "请检查 SIM 卡。[1]"
+    rag_answer_cache.clear()
+
+
+def test_grounded_answer_with_context_bypasses_cache(monkeypatch) -> None:
+    from domain.customer_service_agent.retrieval.answer_cache import rag_answer_cache
+
+    rag_answer_cache.clear()
+    docs = [{
+        "id": "doc-cache",
+        "source": "s",
+        "content": "手机没有信号时检查 SIM 卡。",
+        "metadata": {"version": "1.0.0"},
+    }]
+    store = FakeKnowledgeStore(docs)
+    monkeypatch.setattr(knowledge_retriever.knowledge_service, "get_service", lambda: store)
+    calls = {"n": 0}
+
+    def invoke(messages, **kwargs):
+        calls["n"] += 1
+        return SimpleNamespace(content="请检查 SIM 卡。[1]")
+
+    monkeypatch.setattr(knowledge_retriever, "invoke_llm", invoke)
+    state = create_chat_state("user-1", "session-1", "手机没有信号")
+    state["context_text"] = "<<<MEMORY_REFERENCE_DATA>>>\n此前咨询过套餐\n<<<END_MEMORY_REFERENCE_DATA>>>"
+
+    asyncio.run(knowledge_retriever.retrieve_grounded_answer(state, "telecom", "telecom_troubleshooting"))
+    asyncio.run(knowledge_retriever.retrieve_grounded_answer(state, "telecom", "telecom_troubleshooting"))
+
+    assert calls["n"] == 2  # 带参考上下文不缓存，始终走 LLM
+    rag_answer_cache.clear()

@@ -34,6 +34,7 @@ class TaskSpec(BaseModel):
     capability: str
     dependencies: tuple[str, ...] = ()
     effect: Literal["read", "write"] = "read"
+    execution_mode: Literal["direct", "react"] = "direct"
     arguments: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -64,6 +65,27 @@ class TaskPlan(BaseModel):
 
         for task_id in graph:
             visit(task_id)
+
+
+class QueryUnderstandingResult(BaseModel):
+    schema_version: str = "1.0"
+    standalone_query: str
+    domains: tuple[Literal["telecom", "retail", "fallback"], ...]
+    capabilities: tuple[str, ...]
+    entities: dict[str, str] = Field(default_factory=dict)
+    temporal_range: dict[str, str] | None = None
+    ambiguity: bool = False
+    missing_fields: tuple[str, ...] = ()
+    requires_planning: bool = False
+    confidence: float = Field(ge=0, le=1)
+    source: Literal["deterministic", "llm", "fallback"] = "deterministic"
+
+
+class OrderResolution(BaseModel):
+    status: Literal["resolved", "multiple", "not_found"]
+    order_id: str | None = None
+    candidates: tuple[dict[str, Any], ...] = ()
+    user_fragment: str = ""
 
 
 class AgentResult(BaseModel):

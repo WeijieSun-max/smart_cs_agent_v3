@@ -131,9 +131,47 @@ class BusinessService:
             raise ResourceNotFoundError()
         return order
 
+    def get_order_detail(self, user_id: str, order_id: str) -> dict[str, Any]:
+        self.require_active_user(user_id)
+        order = next(
+            (item for item in self.store.list_order_candidates(user_id) if item.get("order_id") == order_id),
+            None,
+        )
+        if order is None:
+            raise ResourceNotFoundError()
+        return order
+
     def list_orders(self, user_id: str, status: str | None = None) -> list[dict[str, Any]]:
         self.require_active_user(user_id)
         return self.store.list_owned("orders", user_id, status=status)
+
+    def find_orders(
+        self,
+        user_id: str,
+        *,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        product_query: str = "",
+        status: str | None = None,
+    ) -> list[dict[str, Any]]:
+        self.require_active_user(user_id)
+        normalized_product = product_query.strip().lower()
+        result = []
+        for order in self.store.list_order_candidates(user_id):
+            placed_date = str(order.get("placed_at") or "")[:10]
+            if start_date and placed_date < start_date:
+                continue
+            if end_date and placed_date >= end_date:
+                continue
+            if status and order.get("status") != status:
+                continue
+            if normalized_product and not any(
+                normalized_product in f"{item.get('name_snapshot', '')} {item.get('sku_snapshot', '')}".lower()
+                for item in order.get("items", [])
+            ):
+                continue
+            result.append(order)
+        return result[:50]
 
     def list_products(self, query: str = "") -> list[dict[str, Any]]:
         products = self.store.list_public("products", status="active")

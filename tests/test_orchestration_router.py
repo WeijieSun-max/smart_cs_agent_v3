@@ -1,6 +1,21 @@
 from domain.customer_service_agent.orchestration.router import WRITE_CAPABILITIES, route_request
 
 
+def test_router_routes_return_policy_question_without_write_intent() -> None:
+    decision = route_request("购买时间超过7天的商品还可以退货吗")
+
+    assert decision.domains == ("retail",)
+    assert decision.capabilities == ("retail_policy",)
+    assert decision.risk_level == "low"
+
+
+def test_router_keeps_explicit_return_request_as_write() -> None:
+    decision = route_request("帮我申请这个订单的退货")
+
+    assert decision.capabilities == ("request_return",)
+    assert decision.risk_level == "medium"
+
+
 def test_router_routes_telecom_read() -> None:
     decision = route_request("查询当前套餐")
 

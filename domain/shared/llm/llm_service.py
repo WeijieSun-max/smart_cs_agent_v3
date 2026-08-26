@@ -27,6 +27,7 @@ class ModelProfile:
     max_tokens: int | None = None
     timeout_seconds: float = 30.0
     max_retries: int = 1
+    enable_thinking: bool = False
 
 
 def initialize_llm_client(llm_client: BaseChatModel) -> None:
