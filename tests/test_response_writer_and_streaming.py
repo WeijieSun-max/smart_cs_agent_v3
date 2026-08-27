@@ -1,6 +1,8 @@
 from types import SimpleNamespace
 
-from application.customer_service.stream_events import cumulative_response_chunks
+import pytest
+
+from application.customer_service.stream_events import response_delta_chunks
 from domain.customer_service_agent.orchestration.models import AgentResult
 from domain.customer_service_agent.workflow.entity.chat_state import create_chat_state
 from domain.customer_service_agent.workflow.nodes import response_writer_node
@@ -68,10 +70,16 @@ def test_unsafe_writer_output_is_blocked_before_final_emission(monkeypatch) -> N
     assert "保证收益" not in final["final_response"]
 
 
-def test_response_chunks_are_cumulative_and_complete() -> None:
+def test_response_chunks_are_incremental_and_complete() -> None:
     content = "abcdefghij"
 
-    chunks = cumulative_response_chunks(content, max_chars=4)
+    chunks = response_delta_chunks(content, max_chars=4)
 
-    assert chunks == ["abcd", "abcdefgh", "abcdefghij"]
-    assert chunks[-1] == content
+    assert chunks == ["abcd", "efgh", "ij"]
+    assert "".join(chunks) == content
+
+
+def test_response_chunks_handle_empty_content_and_invalid_size() -> None:
+    assert response_delta_chunks("") == []
+    with pytest.raises(ValueError, match="max_chars must be positive"):
+        response_delta_chunks("answer", max_chars=0)

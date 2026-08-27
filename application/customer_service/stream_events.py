@@ -8,10 +8,10 @@ def encode_sse(payload: dict[str, Any]) -> str:
     return f"data:{json.dumps(payload, ensure_ascii=False)}\n\n"
 
 
-def cumulative_response_chunks(content: str, max_chars: int = 80) -> list[str]:
+def response_delta_chunks(content: str, max_chars: int = 12) -> list[str]:
     if max_chars < 1:
         raise ValueError("max_chars must be positive")
-    return [content[:end] for end in range(max_chars, len(content), max_chars)] + ([content] if content else [])
+    return [content[start : start + max_chars] for start in range(0, len(content), max_chars)]
 
 
 async def generate_replay_events(turn, content: str):

@@ -10,9 +10,9 @@ from application.customer_service import agent_run_service
 from application.customer_service.admission import turn_admission
 from application.customer_service.node_trace import NodeTraceRecorder
 from application.customer_service.stream_events import (
-    cumulative_response_chunks as _cumulative_response_chunks,
     encode_sse as _encode_sse,
     generate_replay_events as _generate_replay_events,
+    response_delta_chunks as _response_delta_chunks,
 )
 from application.customer_service.turn_context import (
     clear_checkpoint as _clear_checkpoint,
@@ -154,7 +154,7 @@ def chat_stream(request: ChatStreamRequest) -> StreamingResponse:
     return StreamingResponse(
         _generate_stream_events(request),
         media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
+        headers={"Cache-Control": "no-cache, no-transform", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
     )
 
 
@@ -258,8 +258,8 @@ async def _generate_stream_events_admitted(graph, chat_state, session_id: str, u
                     compliance_passed = bool(output.get("compliance_passed", True))
                 if "final_response" in output:
                     final_response = output.get("final_response") or ""
-                    for cumulative in _cumulative_response_chunks(final_response):
-                        yield _encode_sse({"type": "message_delta", "content": cumulative})
+                    for delta in _response_delta_chunks(final_response):
+                        yield _encode_sse({"type": "message_delta", "delta": delta})
                         await asyncio.sleep(0)
                     yield _encode_sse({"type": "answer", "content": final_response})
 
