@@ -75,11 +75,11 @@ def test_debug_serializer_records_only_memory_packet_metadata() -> None:
             "token_count": 42,
             "max_tokens": 1800,
         },
-        "context_text": (
-            "<<<MEMORY_REFERENCE_DATA>>>\n"
-            f"{secret_memory}\n"
-            "<<<END_MEMORY_REFERENCE_DATA>>>"
-        ),
+        "conversation_context": {
+            "summary": "用户曾咨询退款",
+            "recent_messages": [{"role": "user", "content": "退款什么时候到"}],
+            "memories": [{"memory_type": "preference", "content": secret_memory}],
+        },
     }
 
     result = serialize_debug_value(value)
@@ -94,7 +94,31 @@ def test_debug_serializer_records_only_memory_packet_metadata() -> None:
         "max_tokens": 1800,
     }
     assert secret_memory not in json.dumps(result, ensure_ascii=False)
-    assert result["context_text"] == "[REDACTED_MEMORY_REFERENCE_DATA]"
+    assert result["conversation_context"] == {
+        "summary_present": True,
+        "recent_message_count": 1,
+        "memory_count": 1,
+        "memory_types": ["preference"],
+        "_redacted": "STRUCTURED_MEMORY_REFERENCE_DATA",
+    }
+
+
+def test_debug_serializer_redacts_structured_context_inside_llm_json_prompt() -> None:
+    prompt = json.dumps({
+        "current_query": "继续处理",
+        "conversation_context": {
+            "summary": "敏感历史摘要",
+            "recent_messages": [{"role": "user", "content": "历史消息"}],
+            "memories": [],
+        },
+    }, ensure_ascii=False)
+
+    result = serialize_debug_value(HumanMessage(content=prompt))
+    payload = json.loads(result["content"])
+
+    assert payload["current_query"] == "继续处理"
+    assert payload["conversation_context"]["recent_message_count"] == 1
+    assert "敏感历史摘要" not in result["content"]
 
 
 def test_node_trace_recorder_maps_node_and_multiple_model_calls() -> None:

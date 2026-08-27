@@ -5,6 +5,11 @@ from typing import Any, Callable
 
 from adapter.web.schemas.chat import ChatRequest, ChatStreamRequest
 from application.customer_service.session_ownership import get_session_ownership
+from domain.customer_service_agent.memory.conversation_context import (
+    build_recent_conversation_context,
+)
+from domain.customer_service_agent.memory.models import ConversationMemoryMessage
+from domain.customer_service_agent.memory.token_budget import MemoryTokenBudgetAllocator
 from domain.customer_service_agent.service import memory_service, short_term_memory_service
 from domain.customer_service_agent.service.memory_orchestrator import MemoryOrchestrator
 from domain.customer_service_agent.workflow.entity.chat_state import create_chat_state
@@ -56,7 +61,7 @@ def prepare_turn(request: ChatRequest | ChatStreamRequest, dependencies: TurnCon
         raise RequestConflictError()
     settings = dependencies.settings()
     memory_packet = None
-    prior_context = ""
+    conversation_context = None
     if replay is None:
         if settings.memory_layered_enabled:
             memory_packet = build_memory_packet(
@@ -68,15 +73,20 @@ def prepare_turn(request: ChatRequest | ChatStreamRequest, dependencies: TurnCon
                 settings,
                 dependencies=dependencies,
             )
-        else:
-            prior_context = prior_context_for_turn(memory, session_id, turn.turn_id)
+        if memory_packet is None:
+            conversation_context = conversation_context_for_turn(
+                memory,
+                session_id,
+                turn.turn_id,
+                max_tokens=settings.memory_recent_messages_tokens,
+            )
     state = create_chat_state(
         user_id,
         session_id,
         request.message,
         turn_id=turn.turn_id,
-        prior_context=prior_context,
         memory_packet=memory_packet,
+        conversation_context=conversation_context,
         user_message_persisted=existing_user is not None,
     )
     return user_id, state, turn, replay
@@ -111,19 +121,33 @@ def build_memory_packet(
     return packet.model_dump(mode="json")
 
 
-def prior_context_for_turn(memory, session_id: str, current_turn_id: str, max_chars: int = 4000) -> str:
+def conversation_context_for_turn(
+    memory,
+    session_id: str,
+    current_turn_id: str,
+    *,
+    max_tokens: int = 700,
+) -> dict[str, Any]:
     history = memory.get_history(session_id)
-    parts: list[str] = []
-    length = 0
-    for message in reversed(history):
+    messages: list[ConversationMemoryMessage] = []
+    for message in history:
         if message.get("turn_id") == current_turn_id:
             continue
-        item = f"{message['role']}: {message['content']}"
-        if length + len(item) > max_chars:
-            break
-        parts.insert(0, item)
-        length += len(item)
-    return "\n".join(parts)
+        role = str(message.get("role") or "")
+        content = str(message.get("content") or "").strip()
+        if role not in {"user", "assistant"} or not content:
+            continue
+        values: dict[str, Any] = {"role": role, "content": content[:8000]}
+        if message.get("timestamp"):
+            values["timestamp"] = message["timestamp"]
+        try:
+            messages.append(ConversationMemoryMessage.model_validate(values))
+        except ValueError:
+            values.pop("timestamp", None)
+            messages.append(ConversationMemoryMessage.model_validate(values))
+
+    fitted = MemoryTokenBudgetAllocator().fit_messages(messages, max_tokens)
+    return build_recent_conversation_context(fitted).model_dump(mode="json")
 
 
 def persist_assistant_turn(

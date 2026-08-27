@@ -96,7 +96,12 @@ def test_frontend_user_is_request_identity_and_retry_context_excludes_current_tu
     assert user_id == "attacker"
     assert state["user_id"] == "attacker"
     assert state["user_message_persisted"] is True
-    assert "same request" not in state["prior_context"]
+    packet_messages = (state.get("memory_packet") or {}).get("recent_messages", [])
+    context_messages = state["conversation_context"]["recent_messages"]
+    assert all(
+        message.get("content") != "same request"
+        for message in [*packet_messages, *context_messages]
+    )
     assert replay is None
 
 
@@ -352,7 +357,15 @@ def test_agent_run_listing_batches_step_query() -> None:
 
 
 def test_history_context_does_not_include_current_input() -> None:
-    result = history_fusion_node({"raw_query": "current-input", "prior_context": "user: prior"})
+    result = history_fusion_node({
+        "raw_query": "current-input",
+        "conversation_context": {
+            "summary": "",
+            "recent_messages": [{"role": "user", "content": "prior"}],
+            "memories": [],
+        },
+    })
 
-    assert "current-input" not in result["context_text"]
-    assert "user: prior" in result["context_text"]
+    messages = result["conversation_context"]["recent_messages"]
+    assert all(message["content"] != "current-input" for message in messages)
+    assert messages[0]["content"] == "prior"

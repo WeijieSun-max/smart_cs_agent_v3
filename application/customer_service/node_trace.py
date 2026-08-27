@@ -169,6 +169,8 @@ def _redact_credentials(value: Any) -> Any:
             normalized_key = re.sub(r"[^a-z0-9]", "", str(key).strip().lower())
             if normalized_key == "memorypacket" and isinstance(item, dict):
                 redacted[str(key)] = _memory_packet_trace_summary(item)
+            elif normalized_key == "conversationcontext" and isinstance(item, dict):
+                redacted[str(key)] = _conversation_context_trace_summary(item)
             else:
                 redacted[str(key)] = (
                     "[REDACTED_CREDENTIAL]"
@@ -196,6 +198,7 @@ def _is_credential_key(normalized_key: str) -> bool:
 
 
 def _redact_string(value: str) -> str:
+    value = _redact_structured_context_json(value)
     redacted = _MEMORY_REFERENCE_PATTERN.sub("[REDACTED_MEMORY_REFERENCE_DATA]", value)
     redacted = _BEARER_PATTERN.sub("Bearer [REDACTED_CREDENTIAL]", redacted)
     redacted = _BASIC_AUTH_PATTERN.sub("Basic [REDACTED_CREDENTIAL]", redacted)
@@ -205,6 +208,32 @@ def _redact_string(value: str) -> str:
         redacted,
     )
     return _URL_CREDENTIAL_PATTERN.sub(r"\1[REDACTED_CREDENTIAL]@", redacted)
+
+
+def _redact_structured_context_json(value: str) -> str:
+    stripped = value.strip()
+    if not stripped or stripped[0] not in "[{":
+        return value
+    try:
+        parsed = json.loads(stripped)
+    except (TypeError, ValueError):
+        return value
+    if not _contains_context_key(parsed):
+        return value
+    return json.dumps(_redact_credentials(parsed), ensure_ascii=False, default=str)
+
+
+def _contains_context_key(value: Any) -> bool:
+    if isinstance(value, dict):
+        for key, item in value.items():
+            normalized_key = re.sub(r"[^a-z0-9]", "", str(key).strip().lower())
+            if normalized_key in {"conversationcontext", "memorypacket"}:
+                return True
+            if _contains_context_key(item):
+                return True
+    elif isinstance(value, list):
+        return any(_contains_context_key(item) for item in value)
+    return False
 
 
 def _memory_packet_trace_summary(packet: dict[str, Any]) -> dict[str, Any]:
@@ -226,6 +255,23 @@ def _memory_packet_trace_summary(packet: dict[str, Any]) -> dict[str, Any]:
         "memory_types": memory_types,
         "token_count": packet.get("token_count", 0),
         "max_tokens": packet.get("max_tokens", 0),
+    }
+
+
+def _conversation_context_trace_summary(context: dict[str, Any]) -> dict[str, Any]:
+    recent_messages = context.get("recent_messages")
+    memories = context.get("memories")
+    memory_types = sorted({
+        str(item.get("memory_type"))
+        for item in (memories or [])
+        if isinstance(item, dict) and item.get("memory_type")
+    })
+    return {
+        "summary_present": bool(context.get("summary")),
+        "recent_message_count": len(recent_messages) if isinstance(recent_messages, list) else 0,
+        "memory_count": len(memories) if isinstance(memories, list) else 0,
+        "memory_types": memory_types,
+        "_redacted": "STRUCTURED_MEMORY_REFERENCE_DATA",
     }
 
 

@@ -22,10 +22,9 @@ class ChatState(MessagesState):
     current_time: str  # 当前请求的日期上下文，供需要时间信息的节点使用。
     turn_id: str  # 单次请求/对话轮次的唯一标识，粒度比 session_id 更细。
     raw_query: str  # 用户本轮输入的原始问题，未经改写或处理。
-    prior_context: str  # 进入工作流前已准备好的历史对话上下文。
     memory_packet: dict[str, Any] | None  # 长期记忆检索结果及其相关元数据。
+    conversation_context: dict[str, Any]  # 结构化的 summary、recent_messages 与 memories，仅作不可信参考数据。
     user_message_persisted: bool  # 当前用户消息是否已成功写入持久化存储，避免重复保存。
-    context_text: str  # 工作流节点汇总、整理后供后续推理使用的文本上下文。
     normalized_query: str  # 查询改写、指代消解后的独立问题；业务事实仍需由数据库验证。
     query_understanding: dict[str, Any] | None  # 结构化领域、能力、实体、时间范围和歧义结果。
     pending_action_handled: bool  # 本轮是否已由待确认操作门禁处理。
@@ -62,8 +61,8 @@ def create_chat_state(
     query: str,
     *,
     turn_id: str = "untracked",
-    prior_context: str = "",
     memory_packet: dict[str, Any] | None = None,
+    conversation_context: dict[str, Any] | None = None,
     user_message_persisted: bool = False,
 ) -> ChatState:
     resolved_session_id = session_id or uuid.uuid4().hex
@@ -73,11 +72,14 @@ def create_chat_state(
         "current_time": datetime.now().strftime("%Y-%m-%d"),
         "turn_id": turn_id,
         "raw_query": query,
-        "prior_context": prior_context,
         "memory_packet": memory_packet,
+        "conversation_context": conversation_context or {
+            "summary": "",
+            "recent_messages": [],
+            "memories": [],
+        },
         "user_message_persisted": user_message_persisted,
         "messages": [HumanMessage(content=query)],
-        "context_text": "",
         "normalized_query": query,
         "query_understanding": None,
         "pending_action_handled": False,

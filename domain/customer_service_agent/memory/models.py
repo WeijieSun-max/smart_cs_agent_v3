@@ -138,6 +138,31 @@ class MemoryReference(StrictMemoryModel):
         return value
 
 
+class ConversationContextMemory(StrictMemoryModel):
+    """LLM-facing memory reference without storage identifiers."""
+
+    memory_type: MemoryType
+    content: str = Field(min_length=1, max_length=4000)
+    confidence: float = Field(ge=0.0, le=1.0, allow_inf_nan=False)
+    score: float = Field(ge=0.0, le=1.0, allow_inf_nan=False)
+    updated_at: datetime
+
+    @field_validator("updated_at")
+    @classmethod
+    def require_timezone(cls, value: datetime) -> datetime:
+        if value.tzinfo is None:
+            raise ValueError("context memory timestamp must be timezone-aware")
+        return value
+
+
+class ConversationContext(StrictMemoryModel):
+    """Structured, untrusted reference data supplied to an LLM in one user turn."""
+
+    summary: str = Field(default="", max_length=12_000)
+    recent_messages: list[ConversationMemoryMessage] = Field(default_factory=list, max_length=100)
+    memories: list[ConversationContextMemory] = Field(default_factory=list, max_length=200)
+
+
 class MemoryPacket(StrictMemoryModel):
     session_summary: str = Field(default="", max_length=12_000)
     recent_messages: list[ConversationMemoryMessage] = Field(default_factory=list, max_length=100)

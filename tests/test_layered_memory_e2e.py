@@ -190,7 +190,11 @@ def test_prepare_turn_uses_layered_packet_when_feature_is_enabled(monkeypatch) -
     )
 
     assert replay is None
-    assert state["prior_context"] == ""
+    assert state["conversation_context"] == {
+        "summary": "",
+        "recent_messages": [],
+        "memories": [],
+    }
     assert state["memory_packet"] is not None
     assert state["memory_packet"]["semantic_memories"][0]["content"] == "继续跟进退款进度"
 
