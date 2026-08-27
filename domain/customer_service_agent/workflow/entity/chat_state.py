@@ -29,7 +29,7 @@ class ChatState(MessagesState):
     normalized_query: str  # 查询改写、指代消解后的独立问题；业务事实仍需由数据库验证。
     query_understanding: dict[str, Any] | None  # 结构化领域、能力、实体、时间范围和歧义结果。
     pending_action_handled: bool  # 本轮是否已由待确认操作门禁处理。
-    domain_agent_results: dict[str, list[dict[str, Any]]]  # Telecom/Retail 子图的结构化结果。
+    domain_agent_results: dict[str, list[dict[str, Any]]]  # Knowledge/Telecom/Retail Agent 的结构化结果。
     intent: str | None  # 识别出的用户意图，用于路由到对应处理流程。
     sub_results: dict[str, Any]  # 子任务或子节点的中间处理结果集合。
     compliance_passed: bool  # 合规校验是否通过；决定是否允许正常输出。
@@ -47,6 +47,13 @@ class ChatState(MessagesState):
     route_decision: dict[str, Any] | None  # 路由决策详情，例如目标智能体、处理策略和原因。
     task_plan: dict[str, Any] | None  # 复杂请求拆解出的执行计划。
     task_results: dict[str, Any]  # 执行计划中各任务的处理结果集合。
+    supervisor_round: int  # 当前轮次内 Supervisor 已发起的调度批次数，最多三轮。
+    supervisor_decision: dict[str, Any] | None  # Supervisor LLM 本轮结构化决策。
+    agent_assignments: list[dict[str, Any]]  # 当前待执行的结构化 Agent 任务。
+    agent_assignment_history: list[dict[str, Any]]  # 本轮已调度任务，供复核、评测和审计。
+    active_action: dict[str, Any] | None  # 当前会话待确认治理动作的只读摘要。
+    supervisor_response: str  # Supervisor 最终回答或澄清问题。
+    supervisor_response_source: str  # llm 或 deterministic，供合规层选择审查强度。
 
 # * 之后的参数为仅限关键字参数，调用时必须以参数名传入。
 def create_chat_state(
@@ -92,4 +99,11 @@ def create_chat_state(
         "route_decision": None,
         "task_plan": None,
         "task_results": {},
+        "supervisor_round": 0,
+        "supervisor_decision": None,
+        "agent_assignments": [],
+        "agent_assignment_history": [],
+        "active_action": None,
+        "supervisor_response": "",
+        "supervisor_response_source": "deterministic",
     }

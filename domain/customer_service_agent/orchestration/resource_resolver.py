@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 from typing import Any
 
 from domain.action_governance import get_action_service
@@ -25,9 +24,6 @@ _STATUS_NAMES = {
     "return_requested": "已申请退货",
     "exchange_requested": "已申请换货",
 }
-_CHINESE_ORDINALS = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
-
-
 def needs_order_resolution(capability: str, understanding: QueryUnderstandingResult) -> bool:
     return capability in _ORDER_CAPABILITIES and not understanding.entities.get("order_id")
 
@@ -84,19 +80,14 @@ async def resolve_order(
 
 
 def _ordinal(understanding: QueryUnderstandingResult) -> int | None:
-    value = understanding.entities.get("ordinal") or ""
-    match = re.search(r"\d+", value)
-    if match:
-        return int(match.group())
-    for character, number in _CHINESE_ORDINALS.items():
-        if character in value:
-            return number
-    match = re.search(r"第\s*(\d+)\s*个", understanding.standalone_query)
-    if match:
-        return int(match.group(1))
-    for character, number in _CHINESE_ORDINALS.items():
-        if f"第{character}个" in understanding.standalone_query:
-            return number
+    value = understanding.entities.get("ordinal")
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            return None
     return None
 
 

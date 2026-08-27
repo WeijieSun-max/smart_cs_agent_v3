@@ -4,57 +4,123 @@
     "user_id": "u-active",
     "message": "结合最近流量和通话帮我推荐套餐",
     "expected_route": "telecom",
+    "expected_agents": ["telecom_agent"],
     "expected_capabilities": ["plan_recommendation"],
     "expected_tool_sequence": ["telecom_get_current_plan", "telecom_get_usage_profile", "telecom_list_plans", "telecom_compare_plans"],
     "forbidden_tools": ["telecom_change_plan"],
-    "max_llm_calls": 0
+    "max_llm_calls": 8,
+    "llm_script": {
+      "supervisor.decide": [
+        {"action":"dispatch","standalone_query":"结合最近流量和通话推荐套餐","assignments":[{"task_id":"T1","agent":"telecom_agent","objective":"结合最近三期使用画像比较套餐并给出只读建议","capability":"plan_recommendation","dependencies":[],"arguments":{"line_id":"L1"}}],"confidence":0.99},
+        {"action":"finish","standalone_query":"结合最近流量和通话推荐套餐","response":"建议选择畅享50G-89元套餐；这是只读建议，尚未变更套餐。","confidence":0.99}
+      ],
+      "telecom.agent": [
+        {"action":"tool_call","tool_name":"telecom_get_current_plan","arguments":{"line_id":"L1"}},
+        {"action":"tool_call","tool_name":"telecom_get_usage_profile","arguments":{"line_id":"L1"}},
+        {"action":"tool_call","tool_name":"telecom_list_plans","arguments":{"line_id":"L1"}},
+        {"action":"tool_call","tool_name":"telecom_compare_plans","arguments":{"line_id":"L1","candidate_plan_ids":["P1","P2"]}},
+        {"action":"final","response":"建议选择畅享50G-89元套餐；这是只读建议，尚未变更套餐。"}
+      ]
+    }
   },
   {
     "case_id": "telecom-usage-query",
     "user_id": "u-active",
     "message": "查询流量",
     "expected_route": "telecom",
+    "expected_agents": ["telecom_agent"],
     "expected_capabilities": ["usage"],
     "expected_tool_sequence": ["telecom_get_usage_profile"],
     "forbidden_tools": ["telecom_change_plan"],
-    "max_llm_calls": 0
+    "max_llm_calls": 5,
+    "llm_script": {
+      "supervisor.decide": [
+        {"action":"dispatch","standalone_query":"查询最近流量使用情况","assignments":[{"task_id":"T1","agent":"telecom_agent","objective":"查询当前用户最近流量使用画像","capability":"usage","dependencies":[],"arguments":{"line_id":"L1"}}],"confidence":0.99},
+        {"action":"finish","standalone_query":"查询最近流量使用情况","response":"已查询最近三个账期的流量使用情况。","confidence":0.99}
+      ],
+      "telecom.agent": [
+        {"action":"tool_call","tool_name":"telecom_get_usage_profile","arguments":{"line_id":"L1"}},
+        {"action":"final","response":"已查询最近三个账期的流量使用情况。"}
+      ]
+    }
   },
   {
     "case_id": "telecom-write-confirm",
     "user_id": "u-active",
     "message": "换套餐 line_id:L1 plan_id:P2",
     "expected_route": "telecom",
+    "expected_agents": ["telecom_agent"],
     "expected_capabilities": ["plan_change"],
+    "expected_tool_sequence": ["telecom_quote_plan_change", "telecom_change_plan"],
     "requires_confirmation": true,
-    "max_llm_calls": 0
+    "max_llm_calls": 4,
+    "llm_script": {
+      "supervisor.decide": [
+        {"action":"dispatch","standalone_query":"将线路L1变更为套餐P2","assignments":[{"task_id":"T1","agent":"telecom_agent","objective":"报价并生成线路L1变更为P2的待确认提案","capability":"plan_change","dependencies":[],"arguments":{"line_id":"L1","plan_id":"P2"}}],"confidence":0.99}
+      ],
+      "telecom.agent": [
+        {"action":"tool_call","tool_name":"telecom_quote_plan_change","arguments":{"line_id":"L1","plan_id":"P2"}},
+        {"action":"propose_write","tool_name":"telecom_change_plan","arguments":{"line_id":"L1","plan_id":"P2","expected_version":1},"impact_summary":"将线路L1从畅享20G-59元套餐变更为畅享50G-89元套餐"}
+      ]
+    }
   },
   {
     "case_id": "retail-order-query-explicit",
     "user_id": "u-active",
     "message": "查询订单 order_id:O1",
     "expected_route": "retail",
+    "expected_agents": ["retail_agent"],
     "expected_capabilities": ["order_query"],
     "expected_tool_sequence": ["retail_get_order"],
     "forbidden_tools": ["retail_cancel_order"],
-    "max_llm_calls": 0
+    "max_llm_calls": 5,
+    "llm_script": {
+      "supervisor.decide": [
+        {"action":"dispatch","standalone_query":"查询订单O1","assignments":[{"task_id":"T1","agent":"retail_agent","objective":"查询本人订单O1","capability":"order_query","dependencies":[],"arguments":{"order_id":"O1"}}],"confidence":0.99},
+        {"action":"finish","standalone_query":"查询订单O1","response":"订单DEMO202608000001当前为待处理状态。","confidence":0.99}
+      ],
+      "retail.agent": [
+        {"action":"tool_call","tool_name":"retail_get_order","arguments":{"order_id":"O1"}},
+        {"action":"final","response":"订单DEMO202608000001当前为待处理状态。"}
+      ]
+    }
   },
   {
     "case_id": "retail-cross-user",
     "user_id": "u-active",
     "message": "查询订单 order_id:OTHER",
     "expected_route": "retail",
+    "expected_agents": ["retail_agent"],
     "expected_capabilities": ["order_query"],
+    "expected_tool_sequence": ["retail_get_order"],
     "forbidden_tools": ["retail_cancel_order"],
-    "max_llm_calls": 0
+    "max_llm_calls": 4,
+    "llm_script": {
+      "supervisor.decide": [
+        {"action":"dispatch","standalone_query":"查询订单OTHER","assignments":[{"task_id":"T1","agent":"retail_agent","objective":"仅查询属于当前用户的订单OTHER","capability":"order_query","dependencies":[],"arguments":{"order_id":"OTHER"}}],"confidence":0.99},
+        {"action":"finish","standalone_query":"查询订单OTHER","response":"没有找到属于当前用户的该订单，请核对订单信息。","confidence":0.99}
+      ],
+      "retail.agent": [
+        {"action":"tool_call","tool_name":"retail_get_order","arguments":{"order_id":"OTHER"}}
+      ]
+    }
   },
   {
     "case_id": "troubleshooting-rag-only",
     "user_id": "u-active",
     "message": "手机没信号怎么办",
     "expected_route": "telecom",
+    "expected_agents": ["knowledge_agent"],
     "expected_capabilities": ["telecom_troubleshooting"],
+    "requires_grounding": true,
     "forbidden_tools": ["telecom_set_device_state", "telecom_change_plan"],
-    "max_llm_calls": 2
+    "max_llm_calls": 4,
+    "llm_script": {
+      "supervisor.decide": [
+        {"action":"dispatch","standalone_query":"手机没有信号的排查方法","assignments":[{"task_id":"K1","agent":"knowledge_agent","objective":"手机没有信号怎么办，请依据通信故障知识库回答排查步骤","capability":"telecom_troubleshooting","dependencies":[],"arguments":{}}],"confidence":0.99},
+        {"action":"finish","standalone_query":"手机没有信号的排查方法","response":"请确认飞行模式已关闭并重启设备；若仍无信号请联系人工。[1]","confidence":0.99}
+      ]
+    }
   },
   {
     "case_id": "greeting-fallback",
@@ -62,63 +128,84 @@
     "message": "你好",
     "expected_route": "fallback",
     "expected_capabilities": ["fallback"],
-    "max_llm_calls": 1
+    "max_llm_calls": 2,
+    "llm_script": {
+      "supervisor.decide": [
+        {"action":"finish","standalone_query":"你好","response":"你好，请问需要查询或办理什么业务？","confidence":1}
+      ]
+    }
   },
   {
     "case_id": "retail-order-history-bug",
     "user_id": "u-active",
     "message": "查询本月我购买的商品",
     "expected_route": "retail",
+    "expected_agents": ["retail_agent"],
     "expected_capabilities": ["order_query"],
     "expected_tool_sequence": ["retail_find_orders", "retail_get_order"],
     "forbidden_tools": ["retail_list_products", "retail_cancel_order"],
-    "max_llm_calls": 1,
-    "expected_understanding": {
-      "standalone_query": "查询本月我购买的订单",
-      "domains": ["retail"],
-      "capabilities": ["order_query"],
-      "entities": {},
-      "ambiguity": false,
-      "missing_fields": [],
-      "requires_planning": false,
-      "confidence": 0.95
+    "max_llm_calls": 6,
+    "llm_script": {
+      "supervisor.decide": [
+        {"action":"dispatch","standalone_query":"查询2026-08-01至2026-09-01本人购买的订单","assignments":[{"task_id":"T1","agent":"retail_agent","objective":"查询2026-08-01至2026-09-01本人购买的订单","capability":"order_query","dependencies":[],"arguments":{"start_date":"2026-08-01","end_date":"2026-09-01"}}],"confidence":0.99},
+        {"action":"finish","standalone_query":"查询本月本人购买的订单","response":"本月找到订单DEMO202608000001。","confidence":0.99}
+      ],
+      "retail.agent": [
+        {"action":"tool_call","tool_name":"retail_find_orders","arguments":{"start_date":"2026-08-01","end_date":"2026-09-01"}},
+        {"action":"tool_call","tool_name":"retail_get_order","arguments":{"order_id":"O1"}},
+        {"action":"final","response":"本月找到订单DEMO202608000001。"}
+      ]
     }
   },
   {
-    "case_id": "router-plan-change-colloquial",
+    "case_id": "supervisor-plan-change-colloquial",
     "user_id": "u-active",
     "message": "把 line_id:L1 换成 plan_id:P2",
     "expected_route": "telecom",
+    "expected_agents": ["telecom_agent"],
     "expected_capabilities": ["plan_change"],
+    "expected_tool_sequence": ["telecom_quote_plan_change", "telecom_change_plan"],
     "requires_confirmation": true,
-    "max_llm_calls": 0
+    "max_llm_calls": 4,
+    "llm_script": {
+      "supervisor.decide": [
+        {"action":"dispatch","standalone_query":"将线路L1变更为套餐P2","assignments":[{"task_id":"T1","agent":"telecom_agent","objective":"报价并生成线路L1变更为P2的待确认提案","capability":"plan_change","dependencies":[],"arguments":{"line_id":"L1","plan_id":"P2"}}],"confidence":0.99}
+      ],
+      "telecom.agent": [
+        {"action":"tool_call","tool_name":"telecom_quote_plan_change","arguments":{"line_id":"L1","plan_id":"P2"}},
+        {"action":"propose_write","tool_name":"telecom_change_plan","arguments":{"line_id":"L1","plan_id":"P2","expected_version":1},"impact_summary":"将线路L1从畅享20G-59元套餐变更为畅享50G-89元套餐"}
+      ]
+    }
   },
   {
-    "case_id": "router-negation",
+    "case_id": "supervisor-negation",
     "user_id": "u-active",
     "message": "我不用换套餐",
     "expected_route": "fallback",
     "expected_capabilities": ["fallback"],
     "forbidden_tools": ["telecom_change_plan"],
-    "max_llm_calls": 1,
-    "expected_understanding": {
-      "standalone_query": "我不用换套餐",
-      "domains": ["fallback"],
-      "capabilities": ["fallback"],
-      "entities": {},
-      "ambiguity": false,
-      "missing_fields": [],
-      "requires_planning": false,
-      "confidence": 0.3
+    "max_llm_calls": 2,
+    "llm_script": {
+      "supervisor.decide": [
+        {"action":"finish","standalone_query":"我不需要变更套餐","response":"好的，不会为您生成套餐变更提案。","confidence":0.99}
+      ]
     }
   },
   {
-    "case_id": "router-troubleshooting-no-signal",
+    "case_id": "supervisor-troubleshooting-no-signal",
     "user_id": "u-active",
     "message": "手机没有信号怎么办",
     "expected_route": "telecom",
+    "expected_agents": ["knowledge_agent"],
     "expected_capabilities": ["telecom_troubleshooting"],
+    "requires_grounding": true,
     "forbidden_tools": ["telecom_change_plan"],
-    "max_llm_calls": 2
+    "max_llm_calls": 4,
+    "llm_script": {
+      "supervisor.decide": [
+        {"action":"dispatch","standalone_query":"手机没有信号的排查方法","assignments":[{"task_id":"K1","agent":"knowledge_agent","objective":"手机没有信号怎么办，请依据通信故障知识库回答排查步骤","capability":"telecom_troubleshooting","dependencies":[],"arguments":{}}],"confidence":0.99},
+        {"action":"finish","standalone_query":"手机没有信号的排查方法","response":"请确认飞行模式已关闭并重启设备；若仍无信号请联系人工。[1]","confidence":0.99}
+      ]
+    }
   }
 ]

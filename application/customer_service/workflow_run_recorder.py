@@ -134,6 +134,10 @@ def node_default_title(node_name: str) -> str:
     return {
         "history_fusion_node": "融合会话历史上下文",
         "supervisor_node": "规划并执行 Telecom/Retail 任务",
+        "supervisor_manager_node": "Supervisor 进行语义调度",
+        "domain_dispatch_node": "执行 Knowledge/Telecom/Retail Agent 任务",
+        "pending_action_execution_node": "执行待确认动作决策",
+        "response_writer_node": "整理 Supervisor 回复",
         "compliance_checker_node": "执行合规审查",
         "response_synthesizer_node": "生成最终回复",
     }.get(node_name, node_name)
@@ -195,7 +199,7 @@ def normalize_token_usage(usage: Any) -> dict[str, int] | None:
 def step_type_for_node(node_name: str) -> str:
     if node_name == "history_fusion_node":
         return "thinking"
-    if node_name == "supervisor_node":
+    if node_name in {"supervisor_node", "supervisor_manager_node", "domain_dispatch_node", "pending_action_execution_node"}:
         return "tool_call"
     if node_name == "response_synthesizer_node":
         return "final"

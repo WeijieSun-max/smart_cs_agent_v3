@@ -2,22 +2,23 @@ from __future__ import annotations
 
 import asyncio
 import json
-import re
-from typing import Any
+from typing import Any, Literal
 
 from domain.action_governance import get_action_service
 from domain.customer_service_agent.orchestration.state_updates import build_supervisor_result
 from domain.customer_service_agent.workflow.entity.chat_state import ChatState
 from domain.shared.identity import RequestIdentityContext
 
-_CONFIRM = re.compile(r"^(确认|确认执行|同意|是的|yes|confirm)[。！!\s]*$", re.I)
-_REJECT = re.compile(r"^(取消|拒绝|不同意|不要|no|cancel)[。！!\s]*$", re.I)
-
-
 async def resolve_pending_action(
     state: ChatState,
     identity: RequestIdentityContext,
+    decision: Literal["confirm_action", "reject_action"] | None = None,
 ) -> dict[str, Any] | None:
+    """Apply an already-classified LLM decision to the active governed action.
+
+    This function deliberately does not interpret user text. The supervisor is
+    the only intent classifier; this layer only enforces the action state machine.
+    """
     try:
         actions = get_action_service()
     except RuntimeError:
@@ -25,8 +26,7 @@ async def resolve_pending_action(
     active = await asyncio.to_thread(actions.get_active, identity)
     if active is None:
         return None
-    query = (state.get("raw_query") or "").strip()
-    if _CONFIRM.match(query):
+    if decision == "confirm_action":
         completed = await actions.confirm(identity)
         return build_supervisor_result(
             state,
@@ -34,7 +34,7 @@ async def resolve_pending_action(
             _action_result_text(completed.status, completed.impact_summary, completed.receipt),
             task_results={"action": completed.model_dump(mode="json")},
         )
-    if _REJECT.match(query):
+    if decision == "reject_action":
         rejected = await asyncio.to_thread(actions.reject, identity)
         return build_supervisor_result(
             state,

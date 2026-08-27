@@ -6,7 +6,6 @@ from typing import Any
 
 from domain.action_governance import get_action_service
 from domain.customer_service_agent.file_skills import get_catalog
-from domain.customer_service_agent.orchestration.planner import extract_entities
 from domain.customer_service_agent.orchestration.state_updates import build_supervisor_result
 from domain.customer_service_agent.workflow.entity.chat_state import ChatState
 from domain.shared.identity import RequestIdentityContext
@@ -25,7 +24,7 @@ async def execute_plan_recommendation(
         entry.metadata.version,
         agent_type="telecom_agent",
     )
-    line_id = extract_entities(state["raw_query"]).get("line_id")
+    line_id = _structured_line_id(state)
     arguments = {"line_id": line_id} if line_id else {}
     actions = get_action_service()
     current, usage, plans = await asyncio.gather(
@@ -117,3 +116,15 @@ def _recommendation_text(
         + f"\n分析范围：{usage['analysis_period']}，数据质量：{usage['data_quality']}。"
         + "\n这是只读建议，尚未变更套餐；真正办理前会重新报价并要求二次确认。"
     )
+
+
+def _structured_line_id(state: ChatState) -> str | None:
+    understanding = state.get("query_understanding") or {}
+    entities = understanding.get("entities") if isinstance(understanding, dict) else None
+    if isinstance(entities, dict) and isinstance(entities.get("line_id"), str):
+        return entities["line_id"]
+    for assignment in state.get("agent_assignments") or []:
+        arguments = assignment.get("arguments") if isinstance(assignment, dict) else None
+        if isinstance(arguments, dict) and isinstance(arguments.get("line_id"), str):
+            return arguments["line_id"]
+    return None

@@ -56,7 +56,7 @@ class Actions:
         return self.orders
 
 
-def _understanding(*, ordinal: str | None = None) -> QueryUnderstandingResult:
+def _understanding(*, ordinal: int | None = None) -> QueryUnderstandingResult:
     entities = {"product_query": "手机"}
     if ordinal:
         entities["ordinal"] = ordinal
@@ -120,7 +120,7 @@ def test_ordinal_selects_database_candidate(monkeypatch) -> None:
     actions = Actions(ORDERS[:2])
     monkeypatch.setattr(resource_resolver, "get_action_service", lambda: actions)
 
-    result = asyncio.run(resource_resolver.resolve_order(_understanding(ordinal="第二个"), _identity()))
+    result = asyncio.run(resource_resolver.resolve_order(_understanding(ordinal=2), _identity()))
 
     assert result.status == "resolved"
     assert result.order_id == "order-1"

@@ -1,11 +1,7 @@
 from __future__ import annotations
 
 from domain.customer_service_agent.workflow.nodes import compliance_checker_node as compliance
-from domain.customer_service_agent.workflow.nodes.compliance_checker_node import mask_pii, rule_check
-
-
-def test_mask_pii_masks_phone():
-    assert "138*****000" in mask_pii("手机号 13812345000")
+from domain.customer_service_agent.workflow.nodes.compliance_checker_node import rule_check
 
 
 def test_rule_check_flags_forbidden_terms():
@@ -35,7 +31,7 @@ def test_checker_uses_raw_query_when_sub_results_are_empty(monkeypatch):
     assert output["current_agent"] == "compliance_checker"
 
 
-def test_checker_masks_string_sub_results_when_blocked(monkeypatch):
+def test_checker_preserves_business_pii_in_sub_results_when_blocked(monkeypatch):
     monkeypatch.setattr(
         compliance,
         "full_check",
@@ -51,7 +47,7 @@ def test_checker_masks_string_sub_results_when_blocked(monkeypatch):
         "draft_source": "llm",
     })
 
-    assert "13812345000" not in output["sub_results"]["answer"]
+    assert "13812345000" in output["sub_results"]["answer"]
     assert output["sub_results"]["metadata"] == {"phone": "13812345000"}
     assert output["compliance_result"]["violations"] == ["blocked"]
 
@@ -90,4 +86,13 @@ def test_llm_check_blocks_invalid_json(monkeypatch):
     assert result.passed is False
     assert result.risk_level == "high"
     assert result.violations == ["合规审查结果格式无效，已转人工复核"]
-    assert "13812345000" not in result.sanitized_content
+    assert "13812345000" in result.sanitized_content
+
+
+def test_rule_check_allows_full_phone_and_address_output():
+    content = "当前默认地址：江苏省南京市栖霞区文艺路9号，手机号：18060815554"
+
+    result = rule_check(content)
+
+    assert result.passed is True
+    assert result.sanitized_content == content

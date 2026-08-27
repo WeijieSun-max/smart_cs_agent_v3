@@ -6,13 +6,13 @@ from typing import Any
 from domain.customer_service_agent.tools.tool_registry import get_mcp_server
 
 # 能力词表的唯一事实来源：工具注册表（business_tools.py 的 @server.register 元数据）。
-# 其余地方（router / query_understanding / bounded_react / tool_scheduler）只从这里派生或校验。
+# Supervisor、领域 Agent 与兼容执行器只从这里派生或校验能力，不维护关键词词表。
 
 # 非工具能力：不通过注册表工具执行，而是 RAG 或合成能力。
 NON_TOOL_CAPABILITIES = frozenset({"telecom_troubleshooting", "retail_policy", "fallback"})
 
 # 内部能力：工具注册表声明、但不作为用户可路由意图暴露给理解层的词（由执行层内部使用）。
-INTERNAL_CAPABILITIES = frozenset({"plan_catalog", "order_resolution", "address_query", "payment_query"})
+INTERNAL_CAPABILITIES = frozenset({"plan_catalog", "order_resolution", "payment_query"})
 
 
 @dataclass(frozen=True)
@@ -111,30 +111,19 @@ def reset_capability_index() -> None:
 
 
 def validate_capability_contracts() -> list[str]:
-    """启动期一致性校验：确保各显式词表与注册表派生词表不漂移。返回问题列表（空=一致）。"""
+    """Validate tool mappings; supervisor vocabulary is derived dynamically."""
     index = get_capability_index()
     problems: list[str] = []
 
-    from domain.customer_service_agent.orchestration.query_understanding import _CAPABILITIES
     from domain.customer_service_agent.orchestration.tool_scheduler import CAPABILITY_TO_TOOL
 
-    # 1) 理解层可路由能力 = 注册表可路由能力（允许 fallback 等非工具能力）。
-    expected = index.routable_capabilities()
-    if set(_CAPABILITIES) != expected:
-        missing = sorted(expected - set(_CAPABILITIES))
-        extra = sorted(set(_CAPABILITIES) - expected)
-        if missing:
-            problems.append(f"capability whitelist missing routable capabilities: {missing}")
-        if extra:
-            problems.append(f"capability whitelist has unknown capabilities: {extra}")
-
-    # 2) CAPABILITY_TO_TOOL 每个直连映射都必须指向声明了该能力的 read 工具。
+    # CAPABILITY_TO_TOOL 每个直连映射都必须指向声明了该能力的 read 工具。
     for cap, tool_name in CAPABILITY_TO_TOOL.items():
         read_tools = index.read_tools_by_capability.get(cap, ())
         if tool_name not in read_tools:
             problems.append(f"CAPABILITY_TO_TOOL[{cap}]={tool_name} is not a read tool for that capability")
 
-    # 3) 每个写能力都必须有至少一个 write 工具（保证写意图可执行、可治理）。
+    # 每个写能力都必须有至少一个 write 工具（保证写意图可执行、可治理）。
     for cap in index.write_capabilities:
         if cap not in index.write_tools_by_capability:
             problems.append(f"write capability has no write tool: {cap}")

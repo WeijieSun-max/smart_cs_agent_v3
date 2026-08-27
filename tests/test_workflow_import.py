@@ -14,8 +14,8 @@ from domain.shared.llm.llm_service import initialize_llm_client
 _COMPLIANCE_PASS = '{"passed": true, "risk_level": "low", "violations": [], "suggestions": []}'
 
 
-def _initialize_workflow():
-    initialize_llm_client(FakeListChatModel(responses=[_COMPLIANCE_PASS] * 8))
+def _initialize_workflow(responses=None):
+    initialize_llm_client(FakeListChatModel(responses=responses or [_COMPLIANCE_PASS] * 8))
     initialize_checkpoint(MemorySaver())
     business = initialize_service(InMemoryBusinessStore({
         "users": [{"user_id": "user_001", "status": "active"}],
@@ -40,7 +40,18 @@ def test_chat_state_has_current_runtime_defaults() -> None:
 
 
 def test_workflow_routes_retail_request_to_supervisor() -> None:
-    graph = _initialize_workflow()
+    graph = _initialize_workflow([
+        '{"action":"dispatch","standalone_query":"查询商城里的手机商品",'
+        '"assignments":[{"task_id":"T1","agent":"retail_agent",'
+        '"objective":"查询在售手机商品","capability":"product_query",'
+        '"dependencies":[],"arguments":{"query":"手机"}}],"confidence":0.99}',
+        '{"action":"tool_call","tool_name":"retail_list_products",'
+        '"arguments":{"query":"手机"}}',
+        '{"action":"final","response":"在售商品：5G手机"}',
+        '{"action":"finish","standalone_query":"查询商城里的手机商品",'
+        '"response":"在售商品：5G手机","confidence":0.99}',
+        _COMPLIANCE_PASS,
+    ])
 
     result = graph.invoke(
         create_chat_state("user_001", "retail_test", "查询商城里的手机商品"),
@@ -52,7 +63,11 @@ def test_workflow_routes_retail_request_to_supervisor() -> None:
 
 
 def test_discarded_onboarding_request_falls_back() -> None:
-    graph = _initialize_workflow()
+    graph = _initialize_workflow([
+        '{"action":"finish","standalone_query":"我想开户",'
+        '"response":"当前客服范围不支持开户，请说明要查询或办理的具体业务。","confidence":0.98}',
+        _COMPLIANCE_PASS,
+    ])
 
     result = graph.invoke(
         create_chat_state("user_001", "onboarding_test", "我想开户，请一步步告诉我该怎么做"),
@@ -64,7 +79,11 @@ def test_discarded_onboarding_request_falls_back() -> None:
 
 
 def test_workflow_routes_greeting_to_supervisor_fallback() -> None:
-    graph = _initialize_workflow()
+    graph = _initialize_workflow([
+        '{"action":"finish","standalone_query":"你好",'
+        '"response":"你好，请说明要查询或办理的具体业务。","confidence":1}',
+        _COMPLIANCE_PASS,
+    ])
 
     result = graph.invoke(
         create_chat_state("user_001", "fallback_test", "你好"),

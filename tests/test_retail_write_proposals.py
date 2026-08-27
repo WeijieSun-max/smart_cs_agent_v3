@@ -99,7 +99,7 @@ def _prepare(monkeypatch, capability: str, query: str, entities: dict[str, str],
         (
             "update_order_items",
             "variant_id:variant-1 quantity:2",
-            {"order_id": "order-1"},
+            {"order_id": "order-1", "variant_id": "variant-1", "quantity": 2},
             "retail_update_order_items",
             {"order_id": "order-1", "expected_version": 3, "items": [{"variant_id": "variant-1", "quantity": 2}]},
         ),
@@ -126,7 +126,7 @@ def test_return_and_exchange_select_owned_order_item(monkeypatch, capability, to
         monkeypatch,
         capability,
         "处理手机 quantity:1",
-        {"order_id": "order-1", "product_query": "手机", "reason": "不合适"},
+        {"order_id": "order-1", "product_query": "手机", "reason": "不合适", "quantity": 1},
         order=delivered,
     )
 
@@ -146,7 +146,7 @@ def test_price_adjustment_requires_amount_and_method(monkeypatch) -> None:
         monkeypatch,
         "price_adjustment_refund",
         "申请退差价 20 元，原路退回",
-        {"order_id": "order-1"},
+        {"order_id": "order-1", "amount": 20, "refund_method": "original"},
         order=delivered,
     )
 
@@ -203,7 +203,12 @@ def test_return_proposal_executes_only_after_governed_confirmation() -> None:
         "申请手机退货 quantity:1",
         "request_return",
         _identity(),
-        resolved_entities={"order_id": "order-1", "product_query": "手机", "reason": "不合适"},
+        resolved_entities={
+            "order_id": "order-1",
+            "product_query": "手机",
+            "reason": "不合适",
+            "quantity": 1,
+        },
     ))
 
     assert proposal.startswith("待确认：")

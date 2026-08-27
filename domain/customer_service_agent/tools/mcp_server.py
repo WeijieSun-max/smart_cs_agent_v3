@@ -14,7 +14,6 @@ from jsonschema.validators import validator_for
 from pkg.telemetry import normalize_error, safe_error_status
 from pkg.config.settings import get_settings
 from pkg.exceptions.exception import ToolValidationError
-from domain.customer_service_agent.policy.pii import reject_pii_in_value
 from pkg.telemetry.prometheus_metrics import tool_calls_total,tool_duration_seconds
 
 ToolEffect = Literal["read", "write"]
@@ -157,7 +156,6 @@ class MCPToolServer:
         if tool is None:
             raise ToolValidationError()
         self._validate_arguments(tool, arguments)
-        reject_pii_in_value(arguments)
 
     async def call_tool(
         self,

@@ -14,7 +14,7 @@ def test_qwen_profile_disables_thinking_for_bounded_structured_outputs(monkeypat
     monkeypatch.setattr(openai_compatible_client, "ChatOpenAI", fake_chat_openai)
     settings = SimpleNamespace(qwen_api_key="test-key")
     profile = ModelProfile(
-        name="fast_classifier",
+        name="supervisor",
         model="qwen-test",
         base_url="https://example.invalid/v1",
         max_tokens=1200,

@@ -151,13 +151,16 @@ def test_node_trace_recorder_maps_node_and_multiple_model_calls() -> None:
     assert node_end["data"]["output"]["intent"] == "knowledge"
 
 
-def test_pre_compliance_trace_content_is_redacted() -> None:
+def test_pre_compliance_trace_preserves_raw_structure_and_redacts_credentials() -> None:
     recorder = NodeTraceRecorder("turn-safe")
     started = recorder.consume(_node_event(
         "on_chain_start",
         "writer-node",
         "response_writer_node",
-        {"task_results": {"T1": {"user_fragment": "unsafe draft"}}},
+        {
+            "task_results": {"T1": {"user_fragment": "original draft"}},
+            "api_key": "sk-secretvalue123",
+        },
     ))
     model_started = recorder.consume({
         "event": "on_chat_model_start",
@@ -165,7 +168,7 @@ def test_pre_compliance_trace_content_is_redacted() -> None:
         "run_id": "writer-model",
         "metadata": {"langgraph_node": "response_writer_node"},
         "parent_ids": ["writer-node"],
-        "data": {"input": "unsafe draft"},
+        "data": {"input": "original prompt"},
     })
     model_ended = recorder.consume({
         "event": "on_chat_model_end",
@@ -173,20 +176,21 @@ def test_pre_compliance_trace_content_is_redacted() -> None:
         "run_id": "writer-model",
         "metadata": {"langgraph_node": "response_writer_node"},
         "parent_ids": ["writer-node"],
-        "data": {"output": AIMessage(content="unsafe generated draft")},
+        "data": {"output": AIMessage(content="original model response")},
     })
     ended = recorder.consume(_node_event(
         "on_chain_end",
         "writer-node",
         "response_writer_node",
-        {"draft_response": "unsafe generated draft"},
+        {"draft_response": "original model response"},
     ))
 
-    expected = {"_debug_redacted": "PRE_COMPLIANCE_CONTENT"}
-    assert started["data"]["input"] == expected
-    assert model_started["data"]["prompt"] == expected
-    assert model_ended["data"]["response"] == expected
-    assert ended["data"]["output"] == expected
+    assert started["data"]["input"]["task_results"]["T1"]["user_fragment"] == "original draft"
+    assert started["data"]["input"]["api_key"] == "[REDACTED_CREDENTIAL]"
+    assert model_started["data"]["prompt"] == "original prompt"
+    assert model_ended["data"]["response"]["type"] == "ai"
+    assert model_ended["data"]["response"]["content"] == "original model response"
+    assert ended["data"]["output"] == {"draft_response": "original model response"}
 
 
 def test_node_trace_recorder_uses_metadata_fallback_and_redacts_errors() -> None:

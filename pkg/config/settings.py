@@ -36,8 +36,10 @@ class Settings(BaseSettings):
         alias="QWEN_BASE_URL",
     )
     qwen_model: str = Field("qwen3.7-flash", alias="QWEN_MODEL")
-    qwen_fast_classifier_model: str = Field("", alias="QWEN_FAST_CLASSIFIER_MODEL")
-    qwen_fast_classifier_base_url: str = Field("", alias="QWEN_FAST_CLASSIFIER_BASE_URL")
+    qwen_supervisor_model: str = Field("", alias="QWEN_SUPERVISOR_MODEL")
+    qwen_supervisor_base_url: str = Field("", alias="QWEN_SUPERVISOR_BASE_URL")
+    qwen_knowledge_agent_model: str = Field("", alias="QWEN_KNOWLEDGE_AGENT_MODEL")
+    qwen_knowledge_agent_base_url: str = Field("", alias="QWEN_KNOWLEDGE_AGENT_BASE_URL")
     qwen_query_rewriter_model: str = Field("", alias="QWEN_QUERY_REWRITER_MODEL")
     qwen_query_rewriter_base_url: str = Field("", alias="QWEN_QUERY_REWRITER_BASE_URL")
     qwen_task_planner_model: str = Field("", alias="QWEN_TASK_PLANNER_MODEL")
@@ -69,6 +71,7 @@ class Settings(BaseSettings):
     db_connect_timeout_seconds: int = Field(5, alias="DB_CONNECT_TIMEOUT_SECONDS", ge=1, le=120)
     db_read_timeout_seconds: int = Field(10, alias="DB_READ_TIMEOUT_SECONDS", ge=1, le=300)
     db_write_timeout_seconds: int = Field(10, alias="DB_WRITE_TIMEOUT_SECONDS", ge=1, le=300)
+    pii_encryption_key: str = Field("", alias="PII_ENCRYPTION_KEY", repr=False)
 
     redis_host: str = Field("localhost", alias="REDIS_HOST")
     redis_port: int = Field(6379, alias="REDIS_PORT")

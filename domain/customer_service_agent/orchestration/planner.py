@@ -1,9 +1,15 @@
+"""Typed legacy plan adapter without text parsing.
+
+The manager workflow uses ``AgentAssignment`` directly. This adapter remains for
+bounded-read utilities and accepts only entities already produced by an LLM.
+"""
+
 from __future__ import annotations
 
-import re
+from typing import Any
 
+from domain.customer_service_agent.orchestration.capability_index import get_capability_index
 from domain.customer_service_agent.orchestration.models import RouteDecision, TaskPlan, TaskSpec
-from domain.customer_service_agent.orchestration.router import WRITE_CAPABILITIES
 
 _REACT_CAPABILITIES = frozenset({"current_plan", "usage", "product_query"})
 
@@ -12,32 +18,43 @@ def build_task_plan(
     query: str,
     decision: RouteDecision,
     *,
-    entities: dict[str, str] | None = None,
+    entities: dict[str, Any] | None = None,
     requires_planning: bool = False,
 ) -> TaskPlan:
+    del query
+    index = get_capability_index()
     tasks = []
-    arguments = {**extract_entities(query), **(entities or {})}
-    for index, capability in enumerate(decision.capabilities):
-        domain = (
-            "telecom"
-            if capability.startswith(("plan_", "data_", "roaming", "current_", "usage", "telecom_"))
-            else "retail" if capability != "fallback" else "shared"
-        )
+    arguments = dict(entities or {})
+    for position, capability in enumerate(decision.capabilities, start=1):
+        domain = _capability_domain(capability)
         tasks.append(TaskSpec(
-            task_id=f"T{index + 1}",
+            task_id=f"T{position}",
             domain=domain,
             capability=capability,
-            effect="write" if capability in WRITE_CAPABILITIES else "read",
-            execution_mode="react" if requires_planning and capability in _REACT_CAPABILITIES else "direct",
+            effect="write" if capability in index.write_capabilities else "read",
+            execution_mode=(
+                "react"
+                if requires_planning and capability in _REACT_CAPABILITIES
+                else "direct"
+            ),
             arguments=arguments,
         ))
     return TaskPlan(tasks=tuple(tasks))
 
 
-def extract_entities(query: str) -> dict[str, str]:
-    result: dict[str, str] = {}
-    for key in ("line_id", "plan_id", "order_id", "order_item_id", "variant_id", "address_id", "payment_method_id"):
-        match = re.search(rf"{key}\s*[:=：]\s*([A-Za-z0-9_-]{{1,64}})", query, re.I)
-        if match:
-            result[key] = match.group(1)
-    return result
+def extract_entities(_query: str) -> dict[str, Any]:
+    """Text entity extraction was removed; use structured LLM arguments."""
+    return {}
+
+
+def _capability_domain(capability: str) -> str:
+    if capability == "fallback":
+        return "shared"
+    for tool in get_capability_index().tools:
+        if capability in tool.capabilities and tool.domain in {"telecom", "retail"}:
+            return tool.domain
+    if capability == "telecom_troubleshooting":
+        return "knowledge"
+    if capability == "retail_policy":
+        return "knowledge"
+    return "shared"

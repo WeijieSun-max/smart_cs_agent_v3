@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import re
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
@@ -23,7 +22,7 @@ async def prepare_retail_write_proposal(
     query: str,
     capability: str,
     identity: RequestIdentityContext,
-    entities: dict[str, str],
+    entities: dict[str, Any],
 ) -> str | None:
     if capability not in _RETAIL_CAPABILITIES:
         return None
@@ -195,22 +194,37 @@ async def _propose(actions, tool_name: str, arguments: dict[str, Any], identity,
     return f"待确认：{action.impact_summary}\n请回复“确认”执行，或回复“取消”。"
 
 
-def _variant_items(query: str, entities: dict[str, str]) -> list[dict[str, Any]]:
-    matches = re.findall(
-        r"variant_id\s*[:=：]\s*([A-Za-z0-9_-]{1,26})(?:\s*[,，]?\s*(?:quantity|数量)\s*[:=：]\s*(\d{1,2}))?",
-        query,
-        re.I,
-    )
-    if not matches and entities.get("variant_id"):
-        matches = [(entities["variant_id"], entities.get("quantity") or "1")]
-    return [
-        {"variant_id": variant_id, "quantity": int(quantity or 1)}
-        for variant_id, quantity in matches
-        if 1 <= int(quantity or 1) <= 99
-    ]
+def _variant_items(query: str, entities: dict[str, Any]) -> list[dict[str, Any]]:
+    del query
+    raw_items = entities.get("items")
+    if isinstance(raw_items, list):
+        result = []
+        for item in raw_items:
+            if not isinstance(item, dict):
+                continue
+            variant_id = item.get("variant_id")
+            quantity = item.get("quantity")
+            if (
+                isinstance(variant_id, str)
+                and isinstance(quantity, int)
+                and not isinstance(quantity, bool)
+                and 1 <= quantity <= 99
+            ):
+                result.append({"variant_id": variant_id, "quantity": quantity})
+        return result
+    variant_id = entities.get("variant_id")
+    quantity = entities.get("quantity", 1)
+    if (
+        isinstance(variant_id, str)
+        and isinstance(quantity, int)
+        and not isinstance(quantity, bool)
+        and 1 <= quantity <= 99
+    ):
+        return [{"variant_id": variant_id, "quantity": quantity}]
+    return []
 
 
-def _select_order_item(items: list[dict[str, Any]], entities: dict[str, str]) -> dict[str, Any] | str:
+def _select_order_item(items: list[dict[str, Any]], entities: dict[str, Any]) -> dict[str, Any] | str:
     selectable = [
         item for item in items
         if int(item.get("quantity", 0)) > int(item.get("returned_qty", 0)) + int(item.get("exchanged_qty", 0))
@@ -233,18 +247,18 @@ def _select_order_item(items: list[dict[str, Any]], entities: dict[str, str]) ->
     return f"该订单有多个可办理商品：{names}。请补充商品名称后再试。"
 
 
-def _quantity(query: str, entities: dict[str, str]) -> int:
+def _quantity(query: str, entities: dict[str, Any]) -> int:
+    del query
     value = entities.get("quantity")
-    if value and value.isdigit():
-        return int(value)
-    match = re.search(r"(?:quantity|数量)\s*[:=：]?\s*(\d{1,2})", query, re.I)
-    return int(match.group(1)) if match else 1
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    return 1
 
 
-def _refund_amount(query: str, entities: dict[str, str]) -> Decimal | None:
+def _refund_amount(query: str, entities: dict[str, Any]) -> Decimal | None:
+    del query
     value = entities.get("amount")
-    match = re.search(r"(?:差价|退款|金额)?\s*(\d+(?:\.\d{1,2})?)\s*元", query)
-    raw = value or (match.group(1) if match else None)
+    raw = value
     if raw is None:
         return None
     try:
@@ -254,12 +268,9 @@ def _refund_amount(query: str, entities: dict[str, str]) -> Decimal | None:
     return amount if Decimal("0") < amount <= Decimal("100000") else None
 
 
-def _refund_method(query: str, entities: dict[str, str]) -> str | None:
+def _refund_method(query: str, entities: dict[str, Any]) -> str | None:
+    del query
     value = entities.get("refund_method")
     if value in {"original", "gift_card"}:
         return value
-    if re.search(r"原路|原支付", query):
-        return "original"
-    if re.search(r"礼品卡|购物卡", query):
-        return "gift_card"
     return None

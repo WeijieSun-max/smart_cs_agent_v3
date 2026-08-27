@@ -8,6 +8,7 @@ from uuid import uuid4
 
 from infra.db.mysql_client import MySQLClient
 from pkg.exceptions.exception import RequestConflictError, StorageOperationError, StorageUnavailableError
+from pkg.security import decrypt_pii, encrypt_pii
 
 
 class MySQLBusinessStore:
@@ -149,7 +150,7 @@ class MySQLBusinessStore:
             VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,UTC_TIMESTAMP(6),UTC_TIMESTAMP(6),%s)""",
             (action["action_id"], action["user_id"], action["session_id"], action["turn_id"], action["tool_name"],
              action["tool_version"], action.get("skill_name"), action.get("skill_version"),
-             json.dumps(action["arguments"], ensure_ascii=False, separators=(",", ":")), action["arguments_digest"],
+             _encode_sensitive_json(action["arguments"]), action["arguments_digest"],
              action["impact_summary"], action["status"], action["idempotency_key"], action.get("resource_version"),
              _naive(action["expires_at"])),
         )
@@ -250,6 +251,51 @@ class MySQLBusinessStore:
             else: raise StorageOperationError()
             return {"status":"succeeded","resource_type":"line","resource_id":args["line_id"],"version_before":before,"version_after":before+1,"summary":summary}
 
+        if tool_name == "retail_create_address":
+            address_id = uuid4().hex[:26]
+            set_default = bool(args["set_default"])
+            if set_default:
+                cursor.execute(
+                    "UPDATE cs_user_addresses SET is_default=FALSE,version=version+1,"
+                    "updated_at=UTC_TIMESTAMP(6) WHERE user_id=%s AND status='active' AND is_default=TRUE",
+                    (user_id,),
+                )
+            cursor.execute(
+                """INSERT INTO cs_user_addresses
+                (address_id,user_id,label,recipient_cipher,phone_cipher,province,city,district,
+                 detail_cipher,postal_code,is_default,status,version,created_at,updated_at)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'active',1,UTC_TIMESTAMP(6),UTC_TIMESTAMP(6))""",
+                (
+                    address_id,
+                    user_id,
+                    args.get("label") or "默认收货地址",
+                    encrypt_pii(args["recipient"]),
+                    encrypt_pii(args["phone"]),
+                    args["province"],
+                    args["city"],
+                    args["district"],
+                    encrypt_pii(args["detail"]),
+                    args.get("postal_code"),
+                    set_default,
+                ),
+            )
+            return {
+                "status": "succeeded",
+                "resource_type": "address",
+                "resource_id": address_id,
+                "version_before": 0,
+                "version_after": 1,
+                "summary": {
+                    "label": args.get("label") or "默认收货地址",
+                    "recipient": args["recipient"],
+                    "phone": args["phone"],
+                    "full_address": (
+                        f"{args['province']}{args['city']}{args['district']}{args['detail']}"
+                    ),
+                    "is_default": set_default,
+                },
+            }
+
         cursor.execute("SELECT * FROM rt_orders WHERE order_id=%s AND user_id=%s FOR UPDATE", (args.get("order_id"), user_id))
         order = cursor.fetchone()
         if tool_name == "retail_set_default_address":
@@ -314,8 +360,32 @@ def _action_row(row: dict[str, Any]) -> dict[str, Any]:
     item={key:_normalize(row.get(key)) for key in ("action_id","user_id","session_id","turn_id","tool_name","tool_version","skill_name","skill_version","arguments_digest","impact_summary","status","idempotency_key","resource_version","error_code")}
     for source,target in (("arguments_json","arguments"),("receipt_json","receipt")):
         value=row.get(source)
-        item[target]=json.loads(value) if isinstance(value,str) else _normalize(value)
+        if source == "arguments_json":
+            item[target] = _decode_sensitive_json(value)
+        else:
+            item[target]=json.loads(value) if isinstance(value,str) else _normalize(value)
     for key in ("created_at","updated_at","expires_at","executed_at"):
         value=row.get(key)
         if isinstance(value,datetime): item[key]=value.replace(tzinfo=timezone.utc)
     return item
+
+
+def _encode_sensitive_json(value: dict[str, Any]) -> str:
+    raw = json.dumps(value, ensure_ascii=False, separators=(",", ":"), default=str)
+    token = encrypt_pii(raw).decode("ascii")
+    return json.dumps({"_encrypted_payload": token}, separators=(",", ":"))
+
+
+def _decode_sensitive_json(value: Any) -> dict[str, Any]:
+    parsed = json.loads(value) if isinstance(value, str) else _normalize(value)
+    if isinstance(parsed, dict) and set(parsed) == {"_encrypted_payload"}:
+        plaintext = decrypt_pii(parsed["_encrypted_payload"])
+        if plaintext is None:
+            raise StorageOperationError()
+        decoded = json.loads(plaintext)
+        if not isinstance(decoded, dict):
+            raise StorageOperationError()
+        return decoded
+    if not isinstance(parsed, dict):
+        raise StorageOperationError()
+    return parsed

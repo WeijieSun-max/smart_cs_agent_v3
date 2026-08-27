@@ -21,17 +21,18 @@ class EvaluationCase(BaseModel):
     user_id: str
     message: str
     expected_route: str | None = None
+    expected_agents: tuple[str, ...] = ()
     expected_capabilities: tuple[str, ...] = ()
     expected_tool_sequence: tuple[str, ...] = ()
     forbidden_tools: tuple[str, ...] = ()
     expected_final_state: dict[str, Any] = Field(default_factory=dict)
     requires_confirmation: bool = False
+    requires_grounding: bool = False
     # 延迟预算：结构化的 LLM 调用次数上限（比墙钟时间更稳定、可回放）。
     max_llm_calls: int | None = None
     max_node_tokens: int | None = None
-    # 理解 oracle：LLM-first 下，脚本化 intent.understand 应返回的 _UnderstandingDecision JSON。
-    # 让“LLM 理解 + 确定性下游管线”在无真模型时也可确定性回放。
-    expected_understanding: dict[str, Any] | None = None
+    # Per-run-name LLM oracle for deterministic replay of manager and child agents.
+    llm_script: dict[str, tuple[dict[str, Any] | str, ...]] = Field(default_factory=dict)
 
 
 class RunOutcome(BaseModel):
@@ -85,14 +86,24 @@ class EvaluationHarness:
         final_state = outcome.final_state
         tools = tuple(item.get("tool_name") for item in trajectory if item.get("tool_name"))
         route = final_state.get("intent")
-        route_decision = final_state.get("route_decision") or {}
-        capabilities = tuple(route_decision.get("capabilities") or ())
+        assignments = final_state.get("agent_assignment_history") or ()
+        capabilities = tuple(item.get("capability") for item in assignments if item.get("capability"))
+        if not capabilities and route == "fallback":
+            capabilities = ("fallback",)
+        agents = tuple(dict.fromkeys(item.get("agent") for item in assignments if item.get("agent")))
+        grounded = any(
+            bool(((item.get("facts") or {}).get("rag") or {}).get("grounded"))
+            for item in (final_state.get("task_results") or {}).values()
+            if isinstance(item, dict)
+        )
         assertions = {
             "route": case.expected_route is None or route == case.expected_route,
+            "agents": not case.expected_agents or agents == case.expected_agents,
             "capabilities": not case.expected_capabilities or capabilities == case.expected_capabilities,
             "tool_sequence": not case.expected_tool_sequence or tools == case.expected_tool_sequence,
             "forbidden_tools": not set(tools).intersection(case.forbidden_tools),
             "confirmation": not case.requires_confirmation or final_state.get("pending_action") is not None,
+            "grounding": not case.requires_grounding or grounded,
             "final_state": all(final_state.get(key) == value for key, value in case.expected_final_state.items()),
             "llm_calls": case.max_llm_calls is None or outcome.llm_calls <= case.max_llm_calls,
         }

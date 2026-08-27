@@ -5,7 +5,6 @@ from typing import Any, Callable
 
 from adapter.web.schemas.chat import ChatRequest, ChatStreamRequest
 from application.customer_service.session_ownership import get_session_ownership
-from domain.customer_service_agent.policy.pii import reject_pii
 from domain.customer_service_agent.service import memory_service, short_term_memory_service
 from domain.customer_service_agent.service.memory_orchestrator import MemoryOrchestrator
 from domain.customer_service_agent.workflow.entity.chat_state import create_chat_state
@@ -33,7 +32,10 @@ DEFAULT_DEPENDENCIES = TurnContextDependencies()
 
 
 def validate_turn_request(request: ChatRequest | ChatStreamRequest) -> None:
-    reject_pii(request.message)
+    # Contact details and addresses are valid customer-service business input.
+    # Authentication credentials are protected at observability boundaries;
+    # rejecting all PII here would make governed address/profile writes unusable.
+    del request
 
 
 def prepare_turn(request: ChatRequest | ChatStreamRequest, dependencies: TurnContextDependencies = DEFAULT_DEPENDENCIES):

@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, field
 from typing import Literal
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field, StrictBool, ValidationError
 
-from domain.customer_service_agent.policy.pii import SENSITIVE_PATTERNS, mask_pii
 from domain.customer_service_agent.workflow.entity.chat_state import ChatState
 from domain.shared.llm.llm_service import invoke_llm
 from pkg.llm import parse_json_object
@@ -16,7 +14,8 @@ from pkg.telemetry import record_json_parse
 FORBIDDEN_TERMS = ["保证收益", "稳赚不赔", "零风险", "保本保息", "最高收益", "承诺回报", "内部消息", "内幕"]
 
 COMPLIANCE_SYSTEM_PROMPT = """你是一个金融/电商客服合规审查Agent。
-请检查回复是否包含违规金融用语、PII泄露、越权承诺、歧视或侮辱性内容。
+请检查回复是否包含违规金融用语、越权承诺、歧视或侮辱性内容。
+用户主动提供、或当前用户有权读取的姓名、手机号、邮箱和收货地址属于正常业务数据，允许完整输出，不应判为违规。
 只返回JSON：{"passed": true, "risk_level": "low|medium|high|critical", "violations": [], "suggestions": []}
 """
 
@@ -60,15 +59,9 @@ def rule_check(content: str) -> ComplianceResult:
     for term in FORBIDDEN_TERMS:
         if term in content:
             violations.append(f"包含违规金融用语: {term}")
-    for pii_type, pattern in SENSITIVE_PATTERNS.items():
-        if re.search(pattern, content):
-            violations.append(f"检测到PII信息泄露: {pii_type}")
     if not violations:
-        return ComplianceResult(True, "low", sanitized_content=mask_pii(content))
-    has_pii = any("PII" in item for item in violations)
-    has_forbidden = any("违规金融用语" in item for item in violations)
-    risk_level = "critical" if has_pii and has_forbidden else "high" if has_pii or has_forbidden else "medium"
-    return ComplianceResult(False, risk_level, violations=violations, sanitized_content=mask_pii(content))
+        return ComplianceResult(True, "low", sanitized_content=content)
+    return ComplianceResult(False, "high", violations=violations, sanitized_content=content)
 
 
 def llm_check(content: str) -> ComplianceResult:
@@ -91,7 +84,7 @@ def llm_check(content: str) -> ComplianceResult:
         risk_level=decision.risk_level,
         violations=decision.violations,
         suggestions=decision.suggestions,
-        sanitized_content=mask_pii(content),
+        sanitized_content=content,
     )
 
 
@@ -116,21 +109,11 @@ def _compliance_state_update(state: ChatState, result: ComplianceResult) -> dict
             "violations": result.violations,
             "suggestions": result.suggestions,
         },
-        "sub_results": _masked_sub_results(state, result),
+        "sub_results": dict(state.get("sub_results", {})),
         "draft_response": state.get("draft_response", "") if result.passed else result.sanitized_content,
         "current_agent": "compliance_checker",
         "node_logs": [f"合规审查完成：{result.risk_level}"],
     }
-
-
-def _masked_sub_results(state: ChatState, result: ComplianceResult) -> dict:
-    sub_results = dict(state.get("sub_results", {}))
-    if result.passed:
-        return sub_results
-    for key, value in list(sub_results.items()):
-        if isinstance(value, str):
-            sub_results[key] = mask_pii(value)
-    return sub_results
 
 
 def _merge_compliance_results(rule_result: ComplianceResult, llm_result: ComplianceResult) -> ComplianceResult:
@@ -153,5 +136,5 @@ def _blocked_parse_failure(content: str) -> ComplianceResult:
         False,
         "high",
         violations=["合规审查结果格式无效，已转人工复核"],
-        sanitized_content=mask_pii(content),
+        sanitized_content=content,
     )

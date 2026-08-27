@@ -47,18 +47,8 @@ _MEMORY_REFERENCE_PATTERN = re.compile(
     r"<<<MEMORY_REFERENCE_DATA>>>.*?<<<END_MEMORY_REFERENCE_DATA>>>",
     re.DOTALL,
 )
-_PRE_COMPLIANCE_CONTENT_NODES = frozenset({
-    "domain_dispatch_node",
-    "result_aggregator_node",
-    "response_writer_node",
-    "compliance_checker_node",
-    "execute",
-})
-
-
-def _trace_payload(node_name: str, value: Any) -> Any:
-    if node_name in _PRE_COMPLIANCE_CONTENT_NODES:
-        return {"_debug_redacted": "PRE_COMPLIANCE_CONTENT"}
+def _trace_payload(_node_name: str, value: Any) -> Any:
+    """Keep the original trace shape while applying field-level safety rules."""
     return serialize_debug_value(value)
 
 

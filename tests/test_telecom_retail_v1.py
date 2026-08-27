@@ -4,10 +4,12 @@ import asyncio
 from pathlib import Path
 
 import pytest
+from langchain_core.language_models.fake_chat_models import FakeListChatModel
 
 from domain.action_governance import GovernedActionService,initialize_action_service
 from domain.customer_service_agent.orchestration.models import TaskPlan, TaskSpec
 from domain.shared.identity import RequestIdentityContext
+from domain.shared.llm.llm_service import initialize_llm_client
 from domain.business.service import initialize_service
 from domain.business.store import InMemoryBusinessStore
 from domain.customer_service_agent.file_skills.catalog import FileSkillCatalog,initialize_catalog
@@ -94,8 +96,23 @@ def test_task_plan_rejects_cycles():
 
 def test_supervisor_runs_skill_md_plan_recommendation_end_to_end():
     setup_platform(); initialize_catalog(Path(__file__).parents[1]/"skills",get_mcp_server())
+    initialize_llm_client(FakeListChatModel(responses=[
+        '{"action":"dispatch","standalone_query":"结合最近流量和通话推荐套餐",'
+        '"assignments":[{"task_id":"T1","agent":"telecom_agent",'
+        '"objective":"结合最近三期使用画像比较可用套餐并给出只读建议",'
+        '"capability":"plan_recommendation","dependencies":[],"arguments":{"line_id":"L1"}}],'
+        '"confidence":0.99}',
+        '{"action":"tool_call","tool_name":"telecom_get_current_plan","arguments":{"line_id":"L1"}}',
+        '{"action":"tool_call","tool_name":"telecom_get_usage_profile","arguments":{"line_id":"L1"}}',
+        '{"action":"tool_call","tool_name":"telecom_list_plans","arguments":{"line_id":"L1"}}',
+        '{"action":"tool_call","tool_name":"telecom_compare_plans",'
+        '"arguments":{"line_id":"L1","candidate_plan_ids":["P1","P2"]}}',
+        '{"action":"final","response":"主推荐 P2；这是只读建议，尚未变更套餐。"}',
+        '{"action":"finish","standalone_query":"结合最近流量和通话推荐套餐",'
+        '"response":"主推荐 P2；这是只读建议，尚未变更套餐。","confidence":0.99}',
+    ]))
     state=create_chat_state("u1","s-plan","结合最近流量和通话帮我推荐套餐")
     result=asyncio.run(supervisor_node(state))
     assert result["skill_selection"]["skill_name"]=="telecom-plan-recommendation"
-    assert "P2" in str(result["skill_result"]["facts"]["comparisons"])
+    assert "P2" in str(result["skill_result"]["facts"]["observations"])
     assert "尚未变更套餐" in result["sub_results"]["supervisor"]

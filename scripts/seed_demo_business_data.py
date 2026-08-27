@@ -24,6 +24,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from pkg.config.settings import get_settings  # noqa: E402
+from pkg.security import encrypt_pii  # noqa: E402
 
 
 SEED_COUNT = 20
@@ -79,8 +80,7 @@ def _digest(value: str) -> bytes:
 
 
 def _opaque(value: str) -> bytes:
-    """Create a non-reversible demo token; production must use a KMS-backed cipher."""
-    return f"demo:v1:{hashlib.sha256(value.encode('utf-8')).hexdigest()}".encode("ascii")
+    return encrypt_pii(value)
 
 
 TABLE_ORDER = (
@@ -206,14 +206,14 @@ def build_seed_rows(now: datetime | None = None, count: int = SEED_COUNT) -> dic
 
 
 INSERT_SQL = {
-    "cs_users": "INSERT INTO cs_users (user_id,tenant_id,auth_subject,status,display_name,email_cipher,email_hash,phone_cipher,phone_hash,version,created_at,updated_at,deleted_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON DUPLICATE KEY UPDATE user_id=VALUES(user_id)",
+    "cs_users": "INSERT INTO cs_users (user_id,tenant_id,auth_subject,status,display_name,email_cipher,email_hash,phone_cipher,phone_hash,version,created_at,updated_at,deleted_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON DUPLICATE KEY UPDATE display_name=VALUES(display_name),email_cipher=VALUES(email_cipher),email_hash=VALUES(email_hash),phone_cipher=VALUES(phone_cipher),phone_hash=VALUES(phone_hash)",
     "cs_sessions": "INSERT INTO cs_sessions (session_id,user_id,title,agent_id,favorite,message_count,status,version,created_at,updated_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON DUPLICATE KEY UPDATE session_id=VALUES(session_id)",
-    "cs_user_addresses": "INSERT INTO cs_user_addresses (address_id,user_id,label,recipient_cipher,phone_cipher,province,city,district,detail_cipher,postal_code,is_default,status,version,created_at,updated_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON DUPLICATE KEY UPDATE address_id=VALUES(address_id)",
+    "cs_user_addresses": "INSERT INTO cs_user_addresses (address_id,user_id,label,recipient_cipher,phone_cipher,province,city,district,detail_cipher,postal_code,is_default,status,version,created_at,updated_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON DUPLICATE KEY UPDATE label=VALUES(label),recipient_cipher=VALUES(recipient_cipher),phone_cipher=VALUES(phone_cipher),province=VALUES(province),city=VALUES(city),district=VALUES(district),detail_cipher=VALUES(detail_cipher),postal_code=VALUES(postal_code)",
     "cs_payment_methods": "INSERT INTO cs_payment_methods (payment_method_id,user_id,type,provider_token_cipher,last4,gift_card_balance,currency,status,version,created_at,updated_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON DUPLICATE KEY UPDATE payment_method_id=VALUES(payment_method_id)",
     "tc_accounts": "INSERT INTO tc_accounts (account_id,user_id,account_no,status,version,created_at,updated_at) VALUES (%s,%s,%s,%s,%s,%s,%s) ON DUPLICATE KEY UPDATE account_id=VALUES(account_id)",
     "tc_wallets": "INSERT INTO tc_wallets (wallet_id,account_id,available_balance,currency,version,updated_at) VALUES (%s,%s,%s,%s,%s,%s) ON DUPLICATE KEY UPDATE wallet_id=VALUES(wallet_id)",
     "tc_plans": "INSERT INTO tc_plans (plan_id,plan_code,version_no,name,description,monthly_price,currency,data_limit_mb,data_unlimited,included_voice_minutes,voice_unlimited,voice_overage_price_per_minute,refuel_price_per_gb,max_refuel_mb_per_cycle,roaming_supported,status,effective_from,effective_to,created_at,updated_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON DUPLICATE KEY UPDATE plan_id=VALUES(plan_id)",
-    "tc_lines": "INSERT INTO tc_lines (line_id,account_id,msisdn_cipher,msisdn_hash,status,current_plan_id,roaming_enabled,contract_end_at,last_plan_change_at,version,created_at,updated_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON DUPLICATE KEY UPDATE line_id=VALUES(line_id)",
+    "tc_lines": "INSERT INTO tc_lines (line_id,account_id,msisdn_cipher,msisdn_hash,status,current_plan_id,roaming_enabled,contract_end_at,last_plan_change_at,version,created_at,updated_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON DUPLICATE KEY UPDATE msisdn_cipher=VALUES(msisdn_cipher),msisdn_hash=VALUES(msisdn_hash)",
     "tc_usage_cycles": "INSERT INTO tc_usage_cycles (usage_id,line_id,cycle_start,cycle_end,included_data_mb,used_data_mb,refueled_data_mb,included_voice_minutes,used_voice_minutes,outgoing_call_count,refuel_count,version,updated_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON DUPLICATE KEY UPDATE usage_id=VALUES(usage_id)",
     "rt_products": "INSERT INTO rt_products (product_id,product_code,name,category,description,status,version,created_at,updated_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s) ON DUPLICATE KEY UPDATE product_id=VALUES(product_id)",
     "rt_product_variants": "INSERT INTO rt_product_variants (variant_id,product_id,sku,attributes_json,price,currency,status,version,created_at,updated_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON DUPLICATE KEY UPDATE variant_id=VALUES(variant_id)",

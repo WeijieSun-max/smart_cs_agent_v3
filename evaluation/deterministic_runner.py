@@ -34,17 +34,15 @@ _COMPLIANCE_PASS = '{"passed": true, "risk_level": "low", "violations": [], "sug
 class ScriptedChatModel:
     """Deterministic, in-memory LLM double.
 
-    按 ``run_name`` 返回固定脚本，同时记录每次调用（用于 llm_call_count 延迟断言）。
-    ``intent.understand`` 返回空串，用于把"LLM 无法解析 → 回退到确定性路由器"的
-    现实降级路径变成可复现的固定行为，从而让确定性路由器的语义缺陷独立暴露。
+    按 ``run_name`` 顺序返回 case 脚本，同时记录每次调用，用于有界管理者轨迹和
+    LLM 调用预算断言。
     """
 
     def __init__(self, responses: dict[str, str], *, default: str = ""):
         self._responses = responses
         self._default = default
         self.calls: list[str] = []
-        # 理解 oracle：当前 case 期望 intent.understand 返回的 JSON（None 表示用固定脚本）。
-        self.understanding_response: str | None = None
+        self._script: dict[str, list[str]] = {}
 
     def invoke(self, messages: Any, config: dict[str, Any] | None = None, **kwargs: Any) -> AIMessage:
         run_name = "unknown"
@@ -56,15 +54,19 @@ class ScriptedChatModel:
                 or "unknown"
             )
         self.calls.append(run_name)
-        if run_name == "intent.understand" and self.understanding_response is not None:
-            content = self.understanding_response
-        else:
-            content = self._responses.get(run_name, self._default)
+        scripted = self._script.get(run_name) or []
+        content = scripted.pop(0) if scripted else self._responses.get(run_name, self._default)
         return AIMessage(content=content)
 
-    def reset(self) -> None:
+    def reset(self, script: dict[str, tuple[dict[str, Any] | str, ...]] | None = None) -> None:
         self.calls.clear()
-        self.understanding_response = None
+        self._script = {
+            run_name: [
+                value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+                for value in values
+            ]
+            for run_name, values in (script or {}).items()
+        }
 
 
 class RecordingActionService(GovernedActionService):
@@ -218,12 +220,10 @@ def bootstrap(*, fixtures: dict[str, list[dict[str, Any]]] | None = None) -> Non
     _llm = ScriptedChatModel(
         {
             "compliance.review": _COMPLIANCE_PASS,
-            # 空串 → 理解节点走“回退到确定性路由器”，让路由缺陷独立可复现。
-            "intent.understand": "",
-            "rag.answer": "根据知识库，请先确认飞行模式已关闭并重启设备；若仍无信号请联系人工。[1]",
+            "knowledge.answer": "根据知识库，请先确认飞行模式已关闭并重启设备；若仍无信号请联系人工。[1]",
             "response.compose": '{"response":"已为您汇总查询结果。"}',
         },
-        default=_COMPLIANCE_PASS,
+        default="",
     )
     initialize_llm_client(_llm)  # type: ignore[arg-type]
     initialize_checkpoint(MemorySaver())
@@ -248,10 +248,8 @@ def bootstrap(*, fixtures: dict[str, list[dict[str, Any]]] | None = None) -> Non
 def run_case(case: EvaluationCase) -> RunOutcome:
     bootstrap()
     assert _llm is not None and _actions is not None and _graph is not None
-    _llm.reset()
+    _llm.reset(case.llm_script)
     _trajectory.clear()
-    if case.expected_understanding is not None:
-        _llm.understanding_response = json.dumps(case.expected_understanding, ensure_ascii=False)
 
     state = create_chat_state(case.user_id, case.case_id, case.message)
     config = {"configurable": {"thread_id": f"{case.user_id}:{case.case_id}"}}

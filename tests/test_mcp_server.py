@@ -5,13 +5,19 @@ import pytest
 
 from domain.customer_service_agent.tools.mcp_server import MCPToolServer
 from domain.customer_service_agent.tools.tool_registry import get_mcp_server
-from pkg.exceptions.exception import ToolValidationError, UnsafeInputError
+from pkg.exceptions.exception import ToolValidationError
 
 
 def test_production_tool_discovery_contains_only_telecom_and_retail_tools() -> None:
     names = {tool["name"] for tool in get_mcp_server().list_tools()}
 
-    assert {"telecom_get_current_plan", "telecom_change_plan", "retail_get_order", "retail_cancel_order"} <= names
+    assert {
+        "telecom_get_current_plan",
+        "telecom_change_plan",
+        "retail_get_order",
+        "retail_cancel_order",
+        "retail_create_address",
+    } <= names
     assert not names.intersection({"order_query", "knowledge_search", "ticket_create", "ticket_query", "risk_check", "user_profile"})
 
 
@@ -156,7 +162,7 @@ def test_tool_definitions_and_schemas_are_detached_snapshots() -> None:
         server.validate_arguments("counter", {"count": 0})
 
 
-def test_validate_arguments_rejects_pii_without_execution() -> None:
+def test_validate_arguments_accepts_business_contact_details() -> None:
     server = MCPToolServer()
 
     @server.register(
@@ -173,8 +179,7 @@ def test_validate_arguments_rejects_pii_without_execution() -> None:
     async def echo_text(text: str, _trusted_context=None):
         return text
 
-    with pytest.raises(UnsafeInputError):
-        server.validate_arguments("echo_text", {"text": "call 13800138000"})
+    server.validate_arguments("echo_text", {"text": "call 13800138000"})
 
 
 def test_call_tool_always_injects_trusted_context_keyword() -> None:

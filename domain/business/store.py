@@ -8,6 +8,7 @@ from typing import Any, Protocol
 from uuid import uuid4
 
 from pkg.exceptions.exception import RequestConflictError, StorageOperationError
+from pkg.security import encrypt_pii
 
 
 class BusinessStore(Protocol):
@@ -187,6 +188,46 @@ class InMemoryBusinessStore:
                 row["is_default"] = row.get("address_id") == address["address_id"]
         before = int(address["version"]); address["version"] = before + 1; address["is_default"] = True; self._replace("addresses", address)
         return {"resource_type": "address", "resource_id": address["address_id"], "version_before": before, "version_after": before + 1, "summary": {"is_default": True}}
+
+    def _action_retail_create_address(self, args: dict[str, Any], user_id: str, action_id: str) -> dict[str, Any]:
+        address_id = uuid4().hex[:26]
+        set_default = bool(args["set_default"])
+        if set_default:
+            for row in self._data.get("addresses", []):
+                if row.get("user_id") == user_id and row.get("status") == "active" and row.get("is_default"):
+                    row["is_default"] = False
+                    row["version"] = int(row.get("version", 1)) + 1
+        address = {
+            "address_id": address_id,
+            "user_id": user_id,
+            "label": args.get("label") or "默认收货地址",
+            "recipient_cipher": encrypt_pii(args["recipient"]),
+            "phone_cipher": encrypt_pii(args["phone"]),
+            "province": args["province"],
+            "city": args["city"],
+            "district": args["district"],
+            "detail_cipher": encrypt_pii(args["detail"]),
+            "postal_code": args.get("postal_code"),
+            "is_default": set_default,
+            "status": "active",
+            "version": 1,
+        }
+        self._data.setdefault("addresses", []).append(address)
+        return {
+            "resource_type": "address",
+            "resource_id": address_id,
+            "version_before": 0,
+            "version_after": 1,
+            "summary": {
+                "label": address["label"],
+                "recipient": args["recipient"],
+                "phone": args["phone"],
+                "full_address": (
+                    f"{args['province']}{args['city']}{args['district']}{args['detail']}"
+                ),
+                "is_default": set_default,
+            },
+        }
 
     def _action_retail_request_return(self, args: dict[str, Any], user_id: str, action_id: str) -> dict[str, Any]:
         self._validate_return_items(args)

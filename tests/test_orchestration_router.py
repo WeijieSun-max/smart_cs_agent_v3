@@ -1,51 +1,118 @@
-from domain.customer_service_agent.orchestration.router import WRITE_CAPABILITIES, route_request
+import asyncio
+
+from domain.customer_service_agent.agents import supervisor_agent
+from domain.customer_service_agent.workflow.entity.chat_state import create_chat_state
 
 
-def test_router_routes_return_policy_question_without_write_intent() -> None:
-    decision = route_request("购买时间超过7天的商品还可以退货吗")
-
-    assert decision.domains == ("retail",)
-    assert decision.capabilities == ("retail_policy",)
-    assert decision.risk_level == "low"
+class Response:
+    def __init__(self, content: str) -> None:
+        self.content = content
 
 
-def test_router_keeps_explicit_return_request_as_write() -> None:
-    decision = route_request("帮我申请这个订单的退货")
+def test_simple_query_always_uses_llm_supervisor(monkeypatch) -> None:
+    calls = []
 
-    assert decision.capabilities == ("request_return",)
-    assert decision.risk_level == "medium"
+    def invoke(*args, **kwargs):
+        calls.append((args, kwargs))
+        return Response(
+            '{"action":"dispatch","standalone_query":"查询当前套餐",'
+            '"assignments":[{"task_id":"T1","agent":"telecom_agent",'
+            '"objective":"查询当前用户套餐","capability":"current_plan",'
+            '"dependencies":[],"arguments":{}}],"confidence":0.99}'
+        )
 
+    monkeypatch.setattr(supervisor_agent, "invoke_llm", invoke)
 
-def test_router_routes_telecom_read() -> None:
-    decision = route_request("查询当前套餐")
+    decision = asyncio.run(supervisor_agent.decide_next_step(
+        create_chat_state("user-1", "session-1", "查询当前套餐"),
+        active_action=None,
+        allow_dispatch=True,
+    ))
 
-    assert decision.domains == ("telecom",)
-    assert decision.capabilities == ("current_plan",)
-    assert decision.composite is False
-    assert decision.risk_level == "low"
-
-
-def test_router_routes_retail_write() -> None:
-    decision = route_request("取消订单 order_id:ord-1")
-
-    assert decision.domains == ("retail",)
-    assert decision.capabilities == ("cancel_order",)
-    assert decision.risk_level == "medium"
-    assert "cancel_order" in WRITE_CAPABILITIES
-
-
-def test_router_marks_cross_domain_request_composite() -> None:
-    decision = route_request("查询当前套餐并取消订单 order_id:ord-1")
-
-    assert decision.domains == ("telecom", "retail")
-    assert decision.capabilities == ("current_plan", "cancel_order")
-    assert decision.composite is True
-    assert decision.risk_level == "medium"
+    assert len(calls) == 1
+    assert decision.action == "dispatch"
+    assert decision.assignments[0].agent == "telecom_agent"
+    assert decision.assignments[0].capability == "current_plan"
 
 
-def test_router_falls_back_for_unknown_request() -> None:
-    decision = route_request("你好")
+def test_policy_question_is_assigned_to_knowledge_agent(monkeypatch) -> None:
+    monkeypatch.setattr(
+        supervisor_agent,
+        "invoke_llm",
+        lambda *_args, **_kwargs: Response(
+            '{"action":"dispatch","standalone_query":"超过7天是否可以退货",'
+            '"assignments":[{"task_id":"T1","agent":"knowledge_agent",'
+            '"objective":"查询退货期限政策","capability":"retail_policy",'
+            '"dependencies":[],"arguments":{}}],"confidence":0.98}'
+        ),
+    )
 
-    assert decision.domains == ("fallback",)
-    assert decision.capabilities == ("fallback",)
-    assert decision.confidence == 0.3
+    decision = asyncio.run(supervisor_agent.decide_next_step(
+        create_chat_state("user-1", "session-1", "购买超过7天还能退货吗"),
+        active_action=None,
+        allow_dispatch=True,
+    ))
+
+    assert decision.assignments[0].agent == "knowledge_agent"
+    assert decision.assignments[0].capability == "retail_policy"
+
+
+def test_cross_domain_assignments_are_preserved(monkeypatch) -> None:
+    monkeypatch.setattr(
+        supervisor_agent,
+        "invoke_llm",
+        lambda *_args, **_kwargs: Response(
+            '{"action":"dispatch","standalone_query":"查询套餐和订单",'
+            '"assignments":['
+            '{"task_id":"T1","agent":"telecom_agent","objective":"查询套餐",'
+            '"capability":"current_plan","dependencies":[],"arguments":{}},'
+            '{"task_id":"T2","agent":"retail_agent","objective":"查询订单",'
+            '"capability":"order_query","dependencies":[],"arguments":{"order_id":"order-1"}}'
+            '],"confidence":0.97}'
+        ),
+    )
+
+    decision = asyncio.run(supervisor_agent.decide_next_step(
+        create_chat_state("user-1", "session-1", "查询套餐和订单"),
+        active_action=None,
+        allow_dispatch=True,
+    ))
+
+    assert [item.agent for item in decision.assignments] == ["telecom_agent", "retail_agent"]
+
+
+def test_model_failure_does_not_fall_back_to_keyword_routing(monkeypatch) -> None:
+    monkeypatch.setattr(
+        supervisor_agent,
+        "invoke_llm",
+        lambda *_args, **_kwargs: Response(""),
+    )
+
+    decision = asyncio.run(supervisor_agent.decide_next_step(
+        create_chat_state("user-1", "session-1", "取消订单 order-1"),
+        active_action=None,
+        allow_dispatch=True,
+    ))
+
+    assert decision.action == "finish"
+    assert decision.assignments == ()
+    assert "模型暂时无法" in (decision.response or "")
+
+
+def test_pending_action_is_classified_by_llm(monkeypatch) -> None:
+    monkeypatch.setattr(
+        supervisor_agent,
+        "invoke_llm",
+        lambda *_args, **_kwargs: Response(
+            '{"action":"confirm_action","standalone_query":"确认执行",'
+            '"assignments":[],"confidence":1}'
+        ),
+    )
+
+    decision = asyncio.run(supervisor_agent.decide_next_step(
+        create_chat_state("user-1", "session-1", "可以，按刚才的办"),
+        active_action={"action_id": "a1", "impact_summary": "变更套餐"},
+        allow_dispatch=True,
+    ))
+
+    assert decision.action == "confirm_action"

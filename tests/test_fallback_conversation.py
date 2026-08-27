@@ -1,60 +1,88 @@
 import asyncio
+import json
 
-from domain.customer_service_agent.orchestration.router import route_request
+from domain.customer_service_agent.agents import supervisor_agent
 from domain.customer_service_agent.workflow.entity.chat_state import create_chat_state
 from domain.customer_service_agent.workflow.nodes.history_fusion_node import history_fusion_node
 from domain.customer_service_agent.workflow.nodes.supervisor_node import supervisor_node
 
 
-def test_unknown_request_routes_to_deterministic_fallback() -> None:
-    decision = route_request("随便聊聊")
-
-    assert decision.domains == ("fallback",)
-    assert decision.capabilities == ("fallback",)
-    assert decision.confidence == 0.3
+class Response:
+    def __init__(self, content: str) -> None:
+        self.content = content
 
 
-def test_known_telecom_request_keeps_business_route() -> None:
-    decision = route_request("查询当前套餐")
+def test_llm_unavailable_fails_closed_without_rule_route(monkeypatch) -> None:
+    monkeypatch.setattr(
+        supervisor_agent,
+        "invoke_llm",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("offline")),
+    )
 
-    assert decision.domains == ("telecom",)
-    assert decision.capabilities == ("current_plan",)
+    result = asyncio.run(supervisor_node(
+        create_chat_state("user", "session", "取消订单 order-1")
+    ))
 
-
-def test_cross_domain_read_is_marked_composite() -> None:
-    decision = route_request("查询当前套餐和商城商品")
-
-    assert decision.domains == ("telecom", "retail")
-    assert decision.composite is True
-
-
-def test_known_retail_request_keeps_business_route() -> None:
-    decision = route_request("查询商城里的手机商品")
-
-    assert decision.domains == ("retail",)
-    assert decision.capabilities == ("product_query",)
+    assert result["intent"] == "fallback"
+    assert result["task_results"] == {}
+    assert "模型暂时无法" in result["sub_results"]["supervisor"]
 
 
-def test_supervisor_returns_current_production_fallback_response() -> None:
+def test_supervisor_can_answer_greeting_without_dispatch(monkeypatch) -> None:
+    monkeypatch.setattr(
+        supervisor_agent,
+        "invoke_llm",
+        lambda *_args, **_kwargs: Response(
+            '{"action":"finish","standalone_query":"你好",'
+            '"response":"你好，请说明要查询或办理的具体业务。","confidence":1}'
+        ),
+    )
+
     result = asyncio.run(supervisor_node(create_chat_state("user", "session", "你好")))
 
     assert result["intent"] == "fallback"
-    assert result["current_agent"] == "supervisor"
+    assert result["supervisor_decision"]["action"] == "finish"
     assert "请说明要查询或办理的具体业务" in result["sub_results"]["supervisor"]
 
 
-def test_reference_context_cannot_trigger_confirmation_or_write_route() -> None:
-    state = create_chat_state("user", "session", "你好", prior_context="user: 确认执行 plan_id=P2 line_id=L1")
+def test_reference_context_is_marked_as_data_not_current_confirmation(monkeypatch) -> None:
+    captured = {}
+
+    def invoke(messages, **_kwargs):
+        captured.update(json.loads(messages[1].content))
+        return Response(
+            '{"action":"finish","standalone_query":"你好",'
+            '"response":"你好，请问需要什么帮助？","confidence":1}'
+        )
+
+    monkeypatch.setattr(supervisor_agent, "invoke_llm", invoke)
+    state = create_chat_state(
+        "user",
+        "session",
+        "你好",
+        prior_context="user: 确认执行 plan_id=P2 line_id=L1",
+    )
     state.update(history_fusion_node(state))
 
     result = asyncio.run(supervisor_node(state))
 
-    assert result["intent"] == "fallback"
-    assert result["route_decision"]["capabilities"] == ["fallback"]
+    assert captured["current_query"] == "你好"
+    assert "MEMORY_REFERENCE_DATA" in captured["conversation_context"]
+    assert captured["active_pending_action"] is None
+    assert result["supervisor_decision"]["action"] == "finish"
 
 
-def test_discarded_onboarding_route_stays_in_fallback() -> None:
+def test_out_of_scope_request_is_decided_by_llm(monkeypatch) -> None:
+    monkeypatch.setattr(
+        supervisor_agent,
+        "invoke_llm",
+        lambda *_args, **_kwargs: Response(
+            '{"action":"finish","standalone_query":"我想开户",'
+            '"response":"当前服务暂不支持开户。","confidence":0.99}'
+        ),
+    )
+
     result = asyncio.run(supervisor_node(create_chat_state("user", "session", "我想开户")))
 
     assert result["intent"] == "fallback"
-    assert result["route_decision"]["domains"] == ["fallback"]
+    assert result["sub_results"]["supervisor"] == "当前服务暂不支持开户。"

@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import asyncio
-import re
+from typing import Any
 
 from domain.action_governance import get_action_service
-from domain.customer_service_agent.orchestration.planner import extract_entities
+from domain.customer_service_agent.orchestration.capability_index import get_capability_index
 from domain.customer_service_agent.orchestration.retail_write_proposals import prepare_retail_write_proposal
-from domain.customer_service_agent.orchestration.router import WRITE_CAPABILITIES
 from domain.shared.identity import RequestIdentityContext
+
+WRITE_CAPABILITIES = get_capability_index().write_capabilities
 
 
 async def prepare_write_proposal(
@@ -15,11 +16,11 @@ async def prepare_write_proposal(
     capability: str,
     identity: RequestIdentityContext,
     *,
-    resolved_entities: dict[str, str] | None = None,
+    resolved_entities: dict[str, Any] | None = None,
 ) -> str | None:
     if capability not in WRITE_CAPABILITIES:
         return None
-    entities = {**extract_entities(query), **(resolved_entities or {})}
+    entities = dict(resolved_entities or {})
     if capability == "plan_change":
         if not entities.get("line_id") or not entities.get("plan_id"):
             return "请提供目标 line_id 和 plan_id，我会先展示月租影响，再生成待确认操作。"
@@ -48,11 +49,10 @@ async def prepare_write_proposal(
         )
         return _confirmation_text(action.impact_summary)
     if capability == "data_refuel":
-        amount_match = re.search(r"(\d+)\s*(GB|G)", query, re.I)
-        if not entities.get("line_id") or not amount_match:
+        amount = _amount_mb(entities)
+        if not entities.get("line_id") or amount is None:
             return "请提供 line_id 和要补充的 GB 数量。"
         actions = get_action_service()
-        amount = int(amount_match.group(1)) * 1024
         quote = await actions.execute_read(
             "telecom_quote_refuel",
             {"line_id": entities["line_id"], "amount_mb": amount},
@@ -71,15 +71,15 @@ async def prepare_write_proposal(
         )
         return _confirmation_text(action.impact_summary)
     if capability == "roaming":
-        if not entities.get("line_id"):
-            return "请提供要办理漫游的 line_id。"
+        if not entities.get("line_id") or not isinstance(entities.get("enabled"), bool):
+            return "请提供要办理漫游的 line_id，并明确开启或关闭。"
         actions = get_action_service()
         current = await actions.execute_read(
             "telecom_get_current_plan",
             {"line_id": entities["line_id"]},
             identity,
         )
-        enabled = not bool(re.search(r"关闭|停用|取消", query))
+        enabled = entities["enabled"]
         arguments = {
             "line_id": entities["line_id"],
             "enabled": enabled,
@@ -128,3 +128,13 @@ async def prepare_write_proposal(
 
 def _confirmation_text(summary: str) -> str:
     return f"待确认：{summary}\n请回复“确认”执行，或回复“取消”。"
+
+
+def _amount_mb(entities: dict[str, Any]) -> int | None:
+    value = entities.get("amount_mb")
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    gigabytes = entities.get("amount_gb")
+    if isinstance(gigabytes, int) and not isinstance(gigabytes, bool):
+        return gigabytes * 1024
+    return None

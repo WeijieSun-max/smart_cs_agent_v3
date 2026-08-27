@@ -14,6 +14,7 @@ from pkg.telemetry import record_json_parse
 
 _RESPONSE_SYSTEM_PROMPT = """你是客服回复整合器。只能重组给定 AgentResult 中的事实和用户片段，不得增加新事实、金额、状态、操作结果或设备能力。
 保留引用标记、失败说明、限制条件和不确定性。不得把建议写成已执行结果。只返回JSON：{"response":"..."}。
+用户主动提供、或当前用户有权读取的姓名、手机号、邮箱和收货地址允许按原文完整输出。
 """
 
 
@@ -26,7 +27,11 @@ class _ResponseDecision(BaseModel):
 def response_writer_node(state: ChatState) -> dict[str, Any]:
     fallback = _fallback_text(state)
     results = _agent_results(state)
-    if not _should_compose(results):
+    supervisor_response = (state.get("supervisor_response") or "").strip()
+    if supervisor_response:
+        draft = supervisor_response
+        source = state.get("supervisor_response_source") or "llm"
+    elif not _should_compose(results):
         draft = fallback
         source = "deterministic"
     else:

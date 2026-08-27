@@ -8,7 +8,6 @@ import pytest
 
 from adapter.web.schemas.chat import ChatRequest, ChatStreamRequest
 from application.customer_service import chat_service
-from pkg.exceptions.exception import UnsafeInputError
 
 
 class AdmissionProbe:
@@ -70,11 +69,15 @@ def test_stream_prepares_and_replays_inside_admission(monkeypatch) -> None:
     assert probe.released is True
 
 
-def test_stream_rejects_pii_before_streaming_response_is_created() -> None:
-    with pytest.raises(UnsafeInputError):
-        chat_service.chat_stream(
-            ChatStreamRequest(message="call 13800138000", user_id="user-1")
+def test_stream_accepts_business_contact_details_before_streaming() -> None:
+    response = chat_service.chat_stream(
+        ChatStreamRequest(
+            message="张伟 18060815554 文艺路9号南京邮电大学仙林校区东门",
+            user_id="user-1",
         )
+    )
+
+    assert response.media_type == "text/event-stream"
 
 
 def test_stream_releases_admission_when_prepare_fails(monkeypatch) -> None:

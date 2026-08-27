@@ -1,6 +1,6 @@
 import asyncio
 
-from domain.customer_service_agent.orchestration.models import AgentResult, QueryUnderstandingResult, RouteDecision, TaskPlan, TaskSpec
+from domain.customer_service_agent.orchestration.models import AgentAssignment, AgentResult, SupervisorDecision
 from domain.customer_service_agent.workflow.entity.chat_state import create_chat_state
 from domain.customer_service_agent.workflow.nodes import supervisor_graph_nodes
 
@@ -14,8 +14,8 @@ class ConcurrencyTracker:
 
 
 class FakeDomainGraph:
-    def __init__(self, domain: str, tracker: ConcurrencyTracker) -> None:
-        self.domain = domain
+    def __init__(self, agent: str, tracker: ConcurrencyTracker) -> None:
+        self.agent = agent
         self.tracker = tracker
         self.received = None
 
@@ -27,45 +27,38 @@ class FakeDomainGraph:
         if self.tracker.started == 2:
             self.tracker.ready.set()
         await asyncio.wait_for(self.tracker.ready.wait(), timeout=1)
-        await asyncio.sleep(0)
         self.tracker.inflight -= 1
-        task = state["tasks"][0]
-        return {"results": [AgentResult(
-            task_id=task["task_id"],
+        assignment = state["assignment"]
+        return {"result": AgentResult(
+            task_id=assignment["task_id"],
+            agent=assignment["agent"],
             status="succeeded",
-            user_fragment=f"{self.domain}-result",
-        ).model_dump(mode="json")]}
+            user_fragment=f"{self.agent}-result",
+        ).model_dump(mode="json")}
 
 
 def _cross_domain_state():
     state = create_chat_state("user-1", "session-1", "查询套餐和订单")
-    understanding = QueryUnderstandingResult(
-        standalone_query="查询当前套餐和订单 order_id:order-1",
-        domains=("telecom", "retail"),
-        capabilities=("current_plan", "order_query"),
-        entities={"order_id": "order-1"},
-        confidence=0.98,
-        source="llm",
+    assignments = (
+        AgentAssignment(
+            task_id="T1",
+            agent="telecom_agent",
+            objective="查询当前套餐",
+            capability="current_plan",
+        ),
+        AgentAssignment(
+            task_id="T2",
+            agent="retail_agent",
+            objective="查询订单",
+            capability="order_query",
+            arguments={"order_id": "order-1"},
+        ),
     )
-    route = RouteDecision(
-        domains=("telecom", "retail"),
-        capabilities=("current_plan", "order_query"),
-        confidence=0.98,
-        composite=True,
-    )
-    plan = TaskPlan(tasks=(
-        TaskSpec(task_id="T1", domain="telecom", capability="current_plan"),
-        TaskSpec(task_id="T2", domain="retail", capability="order_query", arguments={"order_id": "order-1"}),
-    ))
-    state.update(
-        query_understanding=understanding.model_dump(mode="json"),
-        route_decision=route.model_dump(mode="json"),
-        task_plan=plan.model_dump(mode="json"),
-    )
+    state["agent_assignments"] = [item.model_dump(mode="json") for item in assignments]
     return state
 
 
-def test_domain_dispatch_runs_telecom_and_retail_subgraphs_concurrently(monkeypatch) -> None:
+def test_domain_dispatch_runs_independent_subgraphs_concurrently(monkeypatch) -> None:
     tracker = ConcurrencyTracker()
     telecom = FakeDomainGraph("telecom", tracker)
     retail = FakeDomainGraph("retail", tracker)
@@ -75,27 +68,34 @@ def test_domain_dispatch_runs_telecom_and_retail_subgraphs_concurrently(monkeypa
     result = asyncio.run(supervisor_graph_nodes.domain_dispatch_node(_cross_domain_state()))
 
     assert tracker.max_inflight == 2
-    assert list(result["domain_agent_results"]) == ["telecom", "retail"]
-    assert [task["domain"] for task in telecom.received["tasks"]] == ["telecom"]
-    assert [task["domain"] for task in retail.received["tasks"]] == ["retail"]
+    assert list(result["task_results"]) == ["T1", "T2"]
+    assert list(result["domain_agent_results"]) == ["telecom_agent", "retail_agent"]
+    assert telecom.received["assignment"]["agent"] == "telecom_agent"
+    assert retail.received["assignment"]["agent"] == "retail_agent"
 
 
-def test_result_aggregator_preserves_task_plan_order() -> None:
+def test_result_aggregator_preserves_task_result_order() -> None:
     state = _cross_domain_state()
-    state["domain_agent_results"] = {
-        "retail": [AgentResult(task_id="T2", status="succeeded", user_fragment="retail-result").model_dump(mode="json")],
-        "telecom": [AgentResult(task_id="T1", status="succeeded", user_fragment="telecom-result").model_dump(mode="json")],
+    state["task_results"] = {
+        "T1": AgentResult(
+            task_id="T1", agent="telecom_agent", status="succeeded", user_fragment="telecom-result"
+        ).model_dump(mode="json"),
+        "T2": AgentResult(
+            task_id="T2", agent="retail_agent", status="succeeded", user_fragment="retail-result"
+        ).model_dump(mode="json"),
     }
 
     result = supervisor_graph_nodes.result_aggregator_node(state)
 
-    assert result["intent"] == "composite"
     assert result["sub_results"]["supervisor"] == "telecom-result\n\nretail-result"
-    assert list(result["task_results"]) == ["T1", "T2"]
 
 
-def test_pending_action_route_bypasses_understanding() -> None:
-    state = create_chat_state("user-1", "session-1", "确认")
-    state["pending_action_handled"] = True
+def test_supervisor_route_uses_typed_llm_action() -> None:
+    state = create_chat_state("user-1", "session-1", "你好")
+    state["supervisor_decision"] = SupervisorDecision(
+        action="finish",
+        standalone_query="你好",
+        response="你好",
+    ).model_dump(mode="json")
 
-    assert supervisor_graph_nodes.pending_action_route(state) == "handled"
+    assert supervisor_graph_nodes.supervisor_route(state) == "respond"

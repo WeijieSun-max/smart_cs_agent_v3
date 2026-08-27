@@ -5,6 +5,7 @@ from decimal import Decimal, ROUND_HALF_UP
 from typing import Any
 
 from pkg.exceptions.exception import ServiceError, StorageUnavailableError
+from pkg.security import decrypt_pii
 
 from .models import PlanComparison, UsageProfile
 from .store import BusinessStore
@@ -182,7 +183,10 @@ class BusinessService:
 
     def list_addresses(self,user_id: str) -> list[dict[str,Any]]:
         self.require_active_user(user_id)
-        return self.store.list_owned("addresses",user_id,status="active")
+        return [
+            _address_for_customer(item)
+            for item in self.store.list_owned("addresses",user_id,status="active")
+        ]
 
     def list_payment_methods(self,user_id: str) -> list[dict[str,Any]]:
         self.require_active_user(user_id)
@@ -205,6 +209,26 @@ def _project(current: dict[str, Any] | None, field: str) -> int:
     if elapsed < 7:
         return int(current.get(field, 0))
     return math.ceil(int(current.get(field, 0)) * total / elapsed)
+
+
+def _address_for_customer(address: dict[str, Any]) -> dict[str, Any]:
+    """Expose owned address details to the customer without leaking cipher blobs."""
+    output = {
+        key: value
+        for key, value in address.items()
+        if key not in {"recipient_cipher", "phone_cipher", "detail_cipher"}
+    }
+    protected_fields = {
+        "recipient": "recipient_cipher",
+        "phone": "phone_cipher",
+        "detail": "detail_cipher",
+    }
+    for public_name, cipher_name in protected_fields.items():
+        value = address.get(public_name)
+        if not isinstance(value, str) or not value:
+            value = decrypt_pii(address.get(cipher_name))
+        output[public_name] = value or "[历史数据不可恢复，请重新保存]"
+    return output
 
 
 _service: BusinessService | None = None

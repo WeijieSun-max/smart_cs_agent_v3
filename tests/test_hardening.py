@@ -25,7 +25,6 @@ from infra.memory.short_term_memory import RedisShortTermMemory
 from pkg.exceptions.exception import (
     RequestConflictError,
     StorageOperationError,
-    UnsafeInputError,
 )
 from pkg.exceptions.exception import handle_global_exception
 from tests.test_persistent_memory import FakeArchive
@@ -129,17 +128,13 @@ def test_reusing_request_id_in_another_session_is_rejected() -> None:
         )
 
 
-def test_pii_is_rejected_before_memory_access(monkeypatch) -> None:
-    monkeypatch.setattr(
-        short_term_memory_service,
-        "get_service",
-        lambda: (_ for _ in ()).throw(AssertionError("memory must not be accessed")),
+def test_pii_is_accepted_as_customer_service_business_input() -> None:
+    request = ChatRequest(
+        message="张伟 18060815554 文艺路9号南京邮电大学仙林校区东门",
+        request_id="request-sensitive1",
     )
 
-    with pytest.raises(UnsafeInputError):
-        chat_service._prepare_turn(
-            ChatRequest(message="call me at 13800138000", request_id="request-sensitive1")
-        )
+    chat_service._validate_turn_request(request)
 
 
 def test_chat_request_rejects_blank_and_oversized_messages() -> None:

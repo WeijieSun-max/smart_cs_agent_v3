@@ -114,7 +114,7 @@ async def retail_find_orders(start_date: str | None = None, end_date: str | None
     )
 
 
-@server.register(name="retail_list_addresses",description="列出当前用户可用收货地址的脱敏信息",input_schema={"type":"object","properties":{}},category="retail",effect="read",supports_idempotency=False,domain="retail",capabilities=("address_query",),allowed_agent_types=("retail_agent",),parallel_safe=True)
+@server.register(name="retail_list_addresses",description="列出当前用户可用收货地址，包括收货人、完整联系电话、完整地址和默认状态",input_schema={"type":"object","properties":{}},category="retail",effect="read",supports_idempotency=False,domain="retail",capabilities=("address_query","default_address","create_address"),allowed_agent_types=("retail_agent",),parallel_safe=True)
 async def retail_list_addresses(_trusted_context: dict | None=None) -> list[dict]:
     return await asyncio.to_thread(business_service.get_service().list_addresses,_user(_trusted_context))
 
@@ -151,6 +151,57 @@ for _name,_extras in _ORDER_WRITE_SCHEMAS.items():
 @server.register(name="retail_set_default_address",description="设置当前用户默认地址；只能确认后执行",input_schema={"type":"object","properties":{"address_id":{"type":"string","minLength":1,"maxLength":26},"expected_version":{"type":"integer","minimum":1}},"required":["address_id","expected_version"]},category="retail",effect="write",supports_idempotency=True,domain="retail",capabilities=("default_address",),allowed_agent_types=("retail_agent",),risk_level="medium")
 async def retail_set_default_address(address_id: str, expected_version: int, _trusted_context: dict | None = None) -> dict:
     return await _execute_write("retail_set_default_address",locals_without_context(locals()),_trusted_context)
+
+
+_CREATE_ADDRESS_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "label": {"type": "string", "minLength": 1, "maxLength": 64},
+        "recipient": {"type": "string", "minLength": 1, "maxLength": 128},
+        "phone": {"type": "string", "minLength": 7, "maxLength": 32},
+        "province": {"type": "string", "minLength": 1, "maxLength": 64},
+        "city": {"type": "string", "minLength": 1, "maxLength": 64},
+        "district": {"type": "string", "minLength": 1, "maxLength": 64},
+        "detail": {"type": "string", "minLength": 1, "maxLength": 512},
+        "postal_code": {"type": ["string", "null"], "maxLength": 20},
+        "set_default": {"type": "boolean"},
+    },
+    "required": [
+        "recipient", "phone", "province", "city", "district",
+        "detail", "set_default",
+    ],
+}
+
+
+@server.register(
+    name="retail_create_address",
+    description="新增当前用户收货地址，可在同一次确认写操作中设为默认地址",
+    input_schema=_CREATE_ADDRESS_SCHEMA,
+    category="retail",
+    effect="write",
+    supports_idempotency=True,
+    domain="retail",
+    capabilities=("create_address", "default_address"),
+    allowed_agent_types=("retail_agent",),
+    risk_level="medium",
+)
+async def retail_create_address(
+    recipient: str,
+    phone: str,
+    province: str,
+    city: str,
+    district: str,
+    detail: str,
+    set_default: bool,
+    label: str = "默认收货地址",
+    postal_code: str | None = None,
+    _trusted_context: dict | None = None,
+) -> dict:
+    return await _execute_write(
+        "retail_create_address",
+        locals_without_context(locals()),
+        _trusted_context,
+    )
 
 
 def locals_without_context(values: dict[str, Any]) -> dict[str, Any]:
