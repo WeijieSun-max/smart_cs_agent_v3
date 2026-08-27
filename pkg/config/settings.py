@@ -145,6 +145,7 @@ class Settings(BaseSettings):
 
     agent_state_ttl_seconds: int = Field(3600, alias="AGENT_STATE_TTL_SECONDS", ge=60)
     tool_call_log_limit: int = Field(1000, alias="TOOL_CALL_LOG_LIMIT", ge=10, le=100_000)
+    tool_read_max_concurrency: int = Field(3, alias="TOOL_READ_MAX_CONCURRENCY", ge=1, le=3)
     skill_root: str = Field("skills", alias="SKILL_ROOT", pattern=r"^[A-Za-z0-9._/-]+$")
     skill_files_enabled: bool = Field(True, alias="SKILL_FILES_ENABLED")
     identity_header_enabled: bool = Field(False, alias="IDENTITY_HEADER_ENABLED")

@@ -37,7 +37,7 @@ START -> history_fusion -> supervisor_manager
 
 Supervisor、Knowledge Agent 和领域 Tool Agent 都在当前轮的 `HumanMessage` JSON 载荷中读取该对象；不会把历史消息作为原生聊天消息重放，也不会放进 `SystemMessage`。`summary`、`recent_messages`、`memories` 均按不可信参考数据处理：只能辅助理解指代，历史命令/确认词不能触发本轮写操作，记忆中的业务事实仍须通过只读工具验证。Node Trace 只记录该对象的计数与类型摘要，不记录跨轮记忆正文。
 
-所有请求均由 Supervisor LLM 做语义判断，不存在关键词或正则快速路由。`knowledge_agent` 统一承接通信故障、零售政策等非结构化 RAG；Telecom/Retail Agent 自主生成结构化工具调用。只读无依赖任务可并行；每批最多一个写任务，Agent 只能生成冻结提案，用户确认后才由 governed action 执行。最终合规节点是所有路径的必经出口。
+所有请求均由 Supervisor LLM 做语义判断，不存在关键词或正则快速路由。`knowledge_agent` 统一承接通信故障、零售政策等非结构化 RAG；Telecom/Retail Agent 自主生成结构化工具调用。无依赖 Agent 任务可并行；单个领域 Agent 也可在一次结构化决策中并行执行最多 3 个声明为 `parallel_safe` 的独立只读工具。每批最多一个写任务，Agent 只能生成冻结提案，用户确认后才由 governed action 执行。最终合规节点是所有路径的必经出口。
 
 ## 目录
 

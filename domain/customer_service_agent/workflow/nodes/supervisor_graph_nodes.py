@@ -152,7 +152,12 @@ async def domain_dispatch_node(state: ChatState) -> dict[str, Any]:
         if not runnable:
             continue
         writes = [item for item in runnable if item.capability in write_capabilities]
-        selected = [writes[0]] if writes else runnable
+        selected_write_id = writes[0].task_id if writes else None
+        selected = [
+            item
+            for item in runnable
+            if item.capability not in write_capabilities or item.task_id == selected_write_id
+        ]
         results = await asyncio.gather(
             *(_execute_assignment(item, state, identity) for item in selected),
             return_exceptions=True,

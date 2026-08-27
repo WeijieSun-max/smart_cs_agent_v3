@@ -8,16 +8,18 @@
     "expected_capabilities": ["plan_recommendation"],
     "expected_tool_sequence": ["telecom_get_current_plan", "telecom_get_usage_profile", "telecom_list_plans", "telecom_compare_plans"],
     "forbidden_tools": ["telecom_change_plan"],
-    "max_llm_calls": 8,
+    "max_llm_calls": 6,
     "llm_script": {
       "supervisor.decide": [
         {"action":"dispatch","standalone_query":"结合最近流量和通话推荐套餐","assignments":[{"task_id":"T1","agent":"telecom_agent","objective":"结合最近三期使用画像比较套餐并给出只读建议","capability":"plan_recommendation","dependencies":[],"arguments":{"line_id":"L1"}}],"confidence":0.99},
         {"action":"finish","standalone_query":"结合最近流量和通话推荐套餐","response":"建议选择畅享50G-89元套餐；这是只读建议，尚未变更套餐。","confidence":0.99}
       ],
       "telecom.agent": [
-        {"action":"tool_call","tool_name":"telecom_get_current_plan","arguments":{"line_id":"L1"}},
-        {"action":"tool_call","tool_name":"telecom_get_usage_profile","arguments":{"line_id":"L1"}},
-        {"action":"tool_call","tool_name":"telecom_list_plans","arguments":{"line_id":"L1"}},
+        {"action":"tool_calls","tool_calls":[
+          {"tool_name":"telecom_get_current_plan","arguments":{"line_id":"L1"}},
+          {"tool_name":"telecom_get_usage_profile","arguments":{"line_id":"L1"}},
+          {"tool_name":"telecom_list_plans","arguments":{"line_id":"L1"}}
+        ]},
         {"action":"tool_call","tool_name":"telecom_compare_plans","arguments":{"line_id":"L1","candidate_plan_ids":["P1","P2"]}},
         {"action":"final","response":"建议选择畅享50G-89元套餐；这是只读建议，尚未变更套餐。"}
       ]

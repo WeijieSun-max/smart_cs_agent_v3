@@ -38,18 +38,17 @@ If the user has multiple lines and has not identified one, ask which line they w
 
 ## Workflow
 
-1. Call `telecom_get_current_plan` for the selected line.
-2. Call `telecom_get_usage_profile` to obtain recent completed billing cycles and the current-cycle projection for:
+1. When the selected `line_id` is already known, call `telecom_get_current_plan`, `telecom_get_usage_profile`, and `telecom_list_plans` together in one `tool_calls` batch. These three reads are independent and declared `parallel_safe`; keep their observations in that order.
+2. From `telecom_get_usage_profile`, use recent completed billing cycles and the current-cycle projection for:
    - mobile data usage in MB;
    - voice call usage in minutes;
    - optional overage/refuel history;
    - data quality and number of usable cycles.
-3. Call `telecom_list_plans` to obtain active and line-eligible candidate plans.
-4. If the usage profile is insufficient, follow the insufficient-data path in the reference instead of pretending the estimate is reliable.
-5. Call `telecom_compare_plans` with the usage profile reference and candidate plan IDs. Treat its price, capacity, expected cost, and eligibility results as authoritative.
-6. Rank the eligible results using the reference policy.
-7. Recommend staying on the current plan when it already meets usage needs and no alternative has a meaningful expected benefit.
-8. Return one primary recommendation and at most two useful alternatives. Exclude dominated plans that are both more expensive and less suitable.
+3. If the usage profile is insufficient, follow the insufficient-data path in the reference instead of pretending the estimate is reliable.
+4. After the first batch returns, call `telecom_compare_plans` with the usage profile reference and candidate plan IDs. Do not place this dependent call in the first batch. Treat its price, capacity, expected cost, and eligibility results as authoritative.
+5. Rank the eligible results using the reference policy.
+6. Recommend staying on the current plan when it already meets usage needs and no alternative has a meaningful expected benefit.
+7. Return one primary recommendation and at most two useful alternatives. Exclude dominated plans that are both more expensive and less suitable.
 
 ## Recommendation behavior
 

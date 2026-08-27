@@ -70,14 +70,24 @@ class SupervisorDecision(BaseModel):
         return self
 
 
+class ReadToolCall(BaseModel):
+    """One independently executable read in a bounded parallel batch."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    tool_name: str = Field(min_length=1, max_length=128)
+    arguments: dict[str, Any] = Field(default_factory=dict)
+
+
 class AgentStepDecision(BaseModel):
     """One bounded domain-agent step; write means proposal, never execution."""
 
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
-    action: Literal["tool_call", "propose_write", "final", "clarify"]
+    action: Literal["tool_call", "tool_calls", "propose_write", "final", "clarify"]
     tool_name: str | None = Field(default=None, max_length=128)
     arguments: dict[str, Any] = Field(default_factory=dict)
+    tool_calls: tuple[ReadToolCall, ...] = Field(default_factory=tuple, max_length=3)
     response: str | None = Field(default=None, max_length=20_000)
     impact_summary: str | None = Field(default=None, max_length=2000)
 
@@ -85,6 +95,12 @@ class AgentStepDecision(BaseModel):
     def validate_step_payload(self) -> "AgentStepDecision":
         if self.action in {"tool_call", "propose_write"} and not self.tool_name:
             raise ValueError("tool action requires tool_name")
+        if self.action == "tool_calls" and not self.tool_calls:
+            raise ValueError("tool_calls requires at least one read call")
+        if self.action != "tool_calls" and self.tool_calls:
+            raise ValueError("only tool_calls may contain a read batch")
+        if self.action == "tool_calls" and self.tool_name:
+            raise ValueError("tool_calls cannot contain a single tool_name")
         if self.action in {"final", "clarify"} and not self.response:
             raise ValueError("response action requires response")
         if self.action == "propose_write" and not self.impact_summary:

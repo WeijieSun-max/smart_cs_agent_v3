@@ -58,6 +58,28 @@ def _cross_domain_state():
     return state
 
 
+def _read_write_state():
+    state = create_chat_state("user-1", "session-rw", "查询订单并变更套餐")
+    assignments = (
+        AgentAssignment(
+            task_id="T1",
+            agent="telecom_agent",
+            objective="生成套餐变更待确认提案",
+            capability="plan_change",
+            arguments={"line_id": "L1", "plan_id": "P2"},
+        ),
+        AgentAssignment(
+            task_id="T2",
+            agent="retail_agent",
+            objective="查询订单",
+            capability="order_query",
+            arguments={"order_id": "order-1"},
+        ),
+    )
+    state["agent_assignments"] = [item.model_dump(mode="json") for item in assignments]
+    return state
+
+
 def test_domain_dispatch_runs_independent_subgraphs_concurrently(monkeypatch) -> None:
     tracker = ConcurrencyTracker()
     telecom = FakeDomainGraph("telecom", tracker)
@@ -72,6 +94,19 @@ def test_domain_dispatch_runs_independent_subgraphs_concurrently(monkeypatch) ->
     assert list(result["domain_agent_results"]) == ["telecom_agent", "retail_agent"]
     assert telecom.received["assignment"]["agent"] == "telecom_agent"
     assert retail.received["assignment"]["agent"] == "retail_agent"
+
+
+def test_domain_dispatch_runs_reads_with_one_write_proposal_concurrently(monkeypatch) -> None:
+    tracker = ConcurrencyTracker()
+    telecom = FakeDomainGraph("telecom", tracker)
+    retail = FakeDomainGraph("retail", tracker)
+    monkeypatch.setattr(supervisor_graph_nodes, "telecom_agent_graph", telecom)
+    monkeypatch.setattr(supervisor_graph_nodes, "retail_agent_graph", retail)
+
+    result = asyncio.run(supervisor_graph_nodes.domain_dispatch_node(_read_write_state()))
+
+    assert tracker.max_inflight == 2
+    assert list(result["task_results"]) == ["T1", "T2"]
 
 
 def test_supervisor_route_uses_typed_llm_action() -> None:
