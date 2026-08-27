@@ -40,10 +40,6 @@ class Settings(BaseSettings):
     qwen_supervisor_base_url: str = Field("", alias="QWEN_SUPERVISOR_BASE_URL")
     qwen_knowledge_agent_model: str = Field("", alias="QWEN_KNOWLEDGE_AGENT_MODEL")
     qwen_knowledge_agent_base_url: str = Field("", alias="QWEN_KNOWLEDGE_AGENT_BASE_URL")
-    qwen_query_rewriter_model: str = Field("", alias="QWEN_QUERY_REWRITER_MODEL")
-    qwen_query_rewriter_base_url: str = Field("", alias="QWEN_QUERY_REWRITER_BASE_URL")
-    qwen_task_planner_model: str = Field("", alias="QWEN_TASK_PLANNER_MODEL")
-    qwen_task_planner_base_url: str = Field("", alias="QWEN_TASK_PLANNER_BASE_URL")
     qwen_telecom_agent_model: str = Field("", alias="QWEN_TELECOM_AGENT_MODEL")
     qwen_telecom_agent_base_url: str = Field("", alias="QWEN_TELECOM_AGENT_BASE_URL")
     qwen_retail_agent_model: str = Field("", alias="QWEN_RETAIL_AGENT_MODEL")
@@ -54,7 +50,6 @@ class Settings(BaseSettings):
     qwen_safety_guard_base_url: str = Field("", alias="QWEN_SAFETY_GUARD_BASE_URL")
     qwen_memory_model: str = Field("", alias="QWEN_MEMORY_MODEL")
     qwen_memory_base_url: str = Field("", alias="QWEN_MEMORY_BASE_URL")
-    llm_provider: str = Field("openai-compatible", alias="LLM_PROVIDER")
     llm_max_concurrency: int = Field(20, alias="LLM_MAX_CONCURRENCY", ge=1, le=200)
     llm_queue_capacity: int = Field(40, alias="LLM_QUEUE_CAPACITY", ge=1, le=1000)
     llm_queue_timeout_seconds: float = Field(15.0, alias="LLM_QUEUE_TIMEOUT_SECONDS", ge=0.1, le=120)
@@ -142,13 +137,11 @@ class Settings(BaseSettings):
     memory_preference_ttl_days: int = Field(365, alias="MEMORY_PREFERENCE_TTL_DAYS", ge=1, le=3650)
     memory_fact_ttl_days: int = Field(180, alias="MEMORY_FACT_TTL_DAYS", ge=1, le=3650)
     memory_task_active_ttl_days: int = Field(90, alias="MEMORY_TASK_ACTIVE_TTL_DAYS", ge=1, le=3650)
-    memory_task_resolved_ttl_days: int = Field(30, alias="MEMORY_TASK_RESOLVED_TTL_DAYS", ge=1, le=3650)
 
     memory_worker_enabled: bool = Field(False, alias="MEMORY_WORKER_ENABLED")
     memory_worker_max_attempts: int = Field(5, alias="MEMORY_WORKER_MAX_ATTEMPTS", ge=1, le=20)
     memory_worker_lease_seconds: int = Field(60, alias="MEMORY_WORKER_LEASE_SECONDS", ge=5, le=3600)
     memory_worker_poll_seconds: float = Field(1.0, alias="MEMORY_WORKER_POLL_SECONDS", ge=0.1, le=60.0)
-    memory_worker_concurrency: int = Field(1, alias="MEMORY_WORKER_CONCURRENCY", ge=1, le=32)
 
     agent_state_ttl_seconds: int = Field(3600, alias="AGENT_STATE_TTL_SECONDS", ge=60)
     tool_call_log_limit: int = Field(1000, alias="TOOL_CALL_LOG_LIMIT", ge=10, le=100_000)
@@ -158,14 +151,9 @@ class Settings(BaseSettings):
     trusted_proxy_networks: str = Field("127.0.0.1/32,::1/128", alias="TRUSTED_PROXY_NETWORKS")
     session_lock_timeout_seconds: float = Field(15.0, alias="SESSION_LOCK_TIMEOUT_SECONDS", ge=0.1, le=120)
     per_user_queue_limit: int = Field(2, alias="PER_USER_QUEUE_LIMIT", ge=1, le=20)
-    knowledge_telecom_collection: str = Field("kb_telecom_v1", alias="KNOWLEDGE_TELECOM_COLLECTION")
-    knowledge_retail_collection: str = Field("kb_retail_v1", alias="KNOWLEDGE_RETAIL_COLLECTION")
     memory_summary_eligible_turns: int = Field(20, alias="MEMORY_SUMMARY_ELIGIBLE_TURNS", ge=2, le=1000)
     memory_summary_increment_turns: int = Field(8, alias="MEMORY_SUMMARY_INCREMENT_TURNS", ge=1, le=100)
-    memory_recent_turns_retained: int = Field(8, alias="MEMORY_RECENT_TURNS_RETAINED", ge=1, le=100)
     action_reconcile_worker_enabled: bool = Field(False, alias="ACTION_RECONCILE_WORKER_ENABLED")
-    evaluation_shadow_enabled: bool = Field(False, alias="EVALUATION_SHADOW_ENABLED")
-    canary_percentage: int = Field(0, alias="CANARY_PERCENTAGE", ge=0, le=100)
 
     skill_execution_timeout_seconds: float = Field(
         30.0,
@@ -179,14 +167,6 @@ class Settings(BaseSettings):
         ge=60,
         le=86_400,
     )
-    pending_action_execution_lease_seconds: int = Field(
-        60,
-        alias="PENDING_ACTION_EXECUTION_LEASE_SECONDS",
-        ge=5,
-        le=3600,
-        strict=True,
-    )
-
     langfuse_enabled: bool = Field(False, alias="LANGFUSE_ENABLED")
     langfuse_public_key: str = Field("", alias="LANGFUSE_PUBLIC_KEY")
     langfuse_secret_key: str = Field("", alias="LANGFUSE_SECRET_KEY")
@@ -201,17 +181,6 @@ class Settings(BaseSettings):
     def root_dir(self) -> Path:
         return ROOT_DIR
 
-    @field_validator("pending_action_execution_lease_seconds", mode="before")
-    @classmethod
-    def validate_pending_action_lease_type(cls, value: object) -> object:
-        if isinstance(value, bool) or isinstance(value, float):
-            raise ValueError(
-                "PENDING_ACTION_EXECUTION_LEASE_SECONDS must be an integer"
-            )
-        if isinstance(value, str) and value.strip().isdigit():
-            return int(value.strip())
-        return value
-
     @field_validator("knowledge_dense_score_threshold", mode="before")
     @classmethod
     def validate_optional_float(cls, value: object) -> object:
@@ -221,14 +190,6 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_cross_field_contracts(self) -> "Settings":
-        if (
-            self.pending_action_execution_lease_seconds
-            <= self.skill_execution_timeout_seconds
-        ):
-            raise ValueError(
-                "PENDING_ACTION_EXECUTION_LEASE_SECONDS must be greater than "
-                "SKILL_EXECUTION_TIMEOUT_SECONDS"
-            )
         layer_budget = (
             self.memory_recent_messages_tokens
             + self.memory_session_summary_tokens

@@ -24,10 +24,6 @@ class FileSkillCatalog:
         self._active_by_name: dict[str, SkillIndexEntry] = {}
         self._frozen = False
 
-    @property
-    def is_frozen(self) -> bool:
-        return self._frozen
-
     def scan_and_freeze(self) -> None:
         if self._frozen:
             raise RuntimeError("skill catalog is already frozen")

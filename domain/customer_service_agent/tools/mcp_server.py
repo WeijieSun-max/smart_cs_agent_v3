@@ -237,29 +237,6 @@ class MCPToolServer:
         except JsonSchemaValidationError as exc:
             raise ToolValidationError() from exc
 
-    async def handle_jsonrpc(self, request: dict[str, Any]) -> dict[str, Any]:
-        method = request.get("method", "")
-        params = request.get("params", {})
-        req_id = request.get("id", 1)
-        if method == "tools/list":
-            return {"jsonrpc": "2.0", "result": self.list_tools(params.get("category")), "id": req_id}
-        if method == "tools/call":
-            result = await self.call_tool(params.get("name", ""), params.get("arguments", {}))
-            return {
-                "jsonrpc": "2.0",
-                "result": {
-                    "success": result.success,
-                    "result": result.result,
-                    "error": result.error,
-                    "errorType": result.error_type,
-                    "errorCode": result.error_code,
-                },
-                "id": req_id,
-            }
-        if method == "ping":
-            return {"jsonrpc": "2.0", "result": {"status": "ok"}, "id": req_id}
-        return {"jsonrpc": "2.0", "error": {"code": -32601, "message": "Method not found"}, "id": req_id}
-
     def get_call_log(self, last_n: int = 100) -> list[dict[str, Any]]:
         return [
             {

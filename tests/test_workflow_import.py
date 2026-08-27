@@ -35,8 +35,8 @@ def test_chat_state_has_current_runtime_defaults() -> None:
 
     assert state["skill_selection"] is None
     assert state["skill_result"] is None
-    assert state["route_decision"] is None
-    assert state["task_plan"] is None
+    assert state["agent_assignments"] == []
+    assert state["task_results"] == {}
 
 
 def test_workflow_routes_retail_request_to_supervisor() -> None:

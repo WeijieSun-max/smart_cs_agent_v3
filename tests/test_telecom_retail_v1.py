@@ -7,7 +7,6 @@ import pytest
 from langchain_core.language_models.fake_chat_models import FakeListChatModel
 
 from domain.action_governance import GovernedActionService,initialize_action_service
-from domain.customer_service_agent.orchestration.models import TaskPlan, TaskSpec
 from domain.shared.identity import RequestIdentityContext
 from domain.shared.llm.llm_service import initialize_llm_client
 from domain.business.service import initialize_service
@@ -15,7 +14,6 @@ from domain.business.store import InMemoryBusinessStore
 from domain.customer_service_agent.file_skills.catalog import FileSkillCatalog,initialize_catalog
 from domain.customer_service_agent.tools.tool_registry import get_mcp_server
 from domain.customer_service_agent.workflow.entity.chat_state import create_chat_state
-from domain.customer_service_agent.workflow.nodes.supervisor_node import supervisor_node
 
 
 def fixtures():
@@ -67,7 +65,7 @@ def test_plan_comparison_is_deterministic_and_owned():
 
 def test_write_requires_frozen_confirmation_and_second_user_lookup():
     store,_,actions=setup_platform(); ctx=identity()
-    action=actions.propose_write("telecom_change_plan",{"line_id":"L1","plan_id":"P2","expected_version":1},ctx,impact_summary="变更套餐")
+    actions.propose_write("telecom_change_plan",{"line_id":"L1","plan_id":"P2","expected_version":1},ctx,impact_summary="变更套餐")
     assert store.get_owned("lines","L1","u1")["current_plan_id"]=="P1"
     completed=asyncio.run(actions.confirm(ctx))
     assert completed.status=="succeeded"
@@ -89,12 +87,7 @@ def test_retail_cancel_is_owned_versioned_and_confirmed():
     assert store.get_owned("orders","O1","u1")["status"]=="cancelled"
 
 
-def test_task_plan_rejects_cycles():
-    plan=TaskPlan(tasks=(TaskSpec(task_id="T1",domain="telecom",capability="usage",dependencies=("T2",)),TaskSpec(task_id="T2",domain="retail",capability="order_query",dependencies=("T1",))))
-    with pytest.raises(ValueError,match="cycle"): plan.validate_dag()
-
-
-def test_supervisor_runs_skill_md_plan_recommendation_end_to_end():
+def test_supervisor_runs_skill_md_plan_recommendation_end_to_end(run_supervisor):
     setup_platform(); initialize_catalog(Path(__file__).parents[1]/"skills",get_mcp_server())
     initialize_llm_client(FakeListChatModel(responses=[
         '{"action":"dispatch","standalone_query":"结合最近流量和通话推荐套餐",'
@@ -112,7 +105,7 @@ def test_supervisor_runs_skill_md_plan_recommendation_end_to_end():
         '"response":"主推荐 P2；这是只读建议，尚未变更套餐。","confidence":0.99}',
     ]))
     state=create_chat_state("u1","s-plan","结合最近流量和通话帮我推荐套餐")
-    result=asyncio.run(supervisor_node(state))
+    result=asyncio.run(run_supervisor(state))
     assert result["skill_selection"]["skill_name"]=="telecom-plan-recommendation"
     assert "P2" in str(result["skill_result"]["facts"]["observations"])
     assert "尚未变更套餐" in result["sub_results"]["supervisor"]

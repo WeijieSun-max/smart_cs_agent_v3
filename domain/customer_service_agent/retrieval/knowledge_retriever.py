@@ -127,8 +127,6 @@ def _state_update(
         "intent": domain,
         "current_agent": "supervisor",
         "sub_results": {**state.get("sub_results", {}), "supervisor": text},
-        "route_decision": None,
-        "task_plan": None,
         "task_results": task_results,
         "node_logs": [f"Supervisor completed: {domain}"],
     }

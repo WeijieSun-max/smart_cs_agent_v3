@@ -11,7 +11,6 @@ from domain.customer_service_agent.memory.models import (
     MemoryItem,
     MemoryOutboxEvent,
     MemoryOutboxEventType,
-    MemoryOutboxStatus,
     MemorySource,
     MemoryStatus,
     MemoryType,

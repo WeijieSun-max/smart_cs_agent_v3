@@ -63,9 +63,6 @@ class MemoryAdminService:
     def replay_dead_letter(self, event_id: str) -> bool:
         return self.repository.replay_dead_letter(event_id, self.clock())
 
-    def outbox_status(self) -> dict[str, int | float | None]:
-        return self.repository.outbox_stats(self.clock())
-
 
 def current_outbox_status() -> dict[str, object]:
     service = memory_service.get_service_or_none()

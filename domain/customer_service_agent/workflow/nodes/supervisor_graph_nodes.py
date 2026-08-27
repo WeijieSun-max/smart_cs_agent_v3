@@ -276,26 +276,6 @@ def pending_action_execution_node_sync(state: ChatState) -> dict[str, Any]:
     return asyncio.run(pending_action_execution_node(state))
 
 
-def result_aggregator_node(state: ChatState) -> dict[str, Any]:
-    """Compatibility helper for callers that need deterministic result ordering."""
-    fragments: list[str] = []
-    for value in (state.get("task_results") or {}).values():
-        try:
-            result = AgentResult.model_validate(value)
-        except (ValidationError, TypeError):
-            continue
-        if result.user_fragment:
-            fragments.append(result.user_fragment)
-    text = "\n\n".join(fragments) or "请补充更明确的业务问题。"
-    return {
-        "sub_results": {**state.get("sub_results", {}), "supervisor": text},
-        "supervisor_response": text,
-        "supervisor_response_source": "deterministic",
-        "current_agent": "result_aggregator",
-        "node_logs": [f"Aggregated {len(fragments)} agent results"],
-    }
-
-
 async def _execute_assignment(
     assignment: AgentAssignment,
     state: ChatState,

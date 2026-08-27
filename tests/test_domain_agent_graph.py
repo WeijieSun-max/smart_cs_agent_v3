@@ -74,22 +74,6 @@ def test_domain_dispatch_runs_independent_subgraphs_concurrently(monkeypatch) ->
     assert retail.received["assignment"]["agent"] == "retail_agent"
 
 
-def test_result_aggregator_preserves_task_result_order() -> None:
-    state = _cross_domain_state()
-    state["task_results"] = {
-        "T1": AgentResult(
-            task_id="T1", agent="telecom_agent", status="succeeded", user_fragment="telecom-result"
-        ).model_dump(mode="json"),
-        "T2": AgentResult(
-            task_id="T2", agent="retail_agent", status="succeeded", user_fragment="retail-result"
-        ).model_dump(mode="json"),
-    }
-
-    result = supervisor_graph_nodes.result_aggregator_node(state)
-
-    assert result["sub_results"]["supervisor"] == "telecom-result\n\nretail-result"
-
-
 def test_supervisor_route_uses_typed_llm_action() -> None:
     state = create_chat_state("user-1", "session-1", "你好")
     state["supervisor_decision"] = SupervisorDecision(

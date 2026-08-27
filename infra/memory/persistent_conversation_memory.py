@@ -141,10 +141,9 @@ class PersistentConversationMemory(IShortTermMemory):
         if archived is None:
             raise StorageOperationError()
         try:
-            cached = self.cache.create_session(session_id, title, agent_id)
+            self.cache.create_session(session_id, title, agent_id)
         except Exception:
             record_fallback("redis")
-            cached = None
         return archived
 
     def list_sessions(self) -> list[dict[str, object]]:
@@ -185,10 +184,9 @@ class PersistentConversationMemory(IShortTermMemory):
         if not archived:
             return False
         try:
-            cached = self.cache.delete_session(session_id)
+            self.cache.delete_session(session_id)
         except Exception:
             record_fallback("redis")
-            cached = False
         return True
 
     def migrate_cache_to_archive(self) -> int:

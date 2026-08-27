@@ -13,9 +13,8 @@ def initialize_llm() -> None:
     default_model = settings.qwen_model
     profile_models = {
         "default": default_model,
-        "supervisor": settings.qwen_supervisor_model or settings.qwen_task_planner_model or default_model,
+        "supervisor": settings.qwen_supervisor_model or default_model,
         "knowledge_agent": settings.qwen_knowledge_agent_model or settings.qwen_response_writer_model or default_model,
-        "query_rewriter": settings.qwen_query_rewriter_model or default_model,
         "telecom_agent": settings.qwen_telecom_agent_model or default_model,
         "retail_agent": settings.qwen_retail_agent_model or default_model,
         "response_writer": settings.qwen_response_writer_model or default_model,
@@ -24,9 +23,8 @@ def initialize_llm() -> None:
     }
     profile_base_urls = {
         "default": settings.qwen_base_url,
-        "supervisor": settings.qwen_supervisor_base_url or settings.qwen_task_planner_base_url or settings.qwen_base_url,
+        "supervisor": settings.qwen_supervisor_base_url or settings.qwen_base_url,
         "knowledge_agent": settings.qwen_knowledge_agent_base_url or settings.qwen_response_writer_base_url or settings.qwen_base_url,
-        "query_rewriter": settings.qwen_query_rewriter_base_url or settings.qwen_base_url,
         "telecom_agent": settings.qwen_telecom_agent_base_url or settings.qwen_base_url,
         "retail_agent": settings.qwen_retail_agent_base_url or settings.qwen_base_url,
         "response_writer": settings.qwen_response_writer_base_url or settings.qwen_base_url,
@@ -48,7 +46,6 @@ def initialize_llm() -> None:
     run_prefixes = {
         "supervisor.": "supervisor",
         "knowledge.": "knowledge_agent",
-        "rag.query_rewrite": "query_rewriter",
         "rag.": "response_writer",
         "telecom.": "telecom_agent",
         "retail.": "retail_agent",

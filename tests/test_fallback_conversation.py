@@ -4,7 +4,6 @@ import json
 from domain.customer_service_agent.agents import supervisor_agent
 from domain.customer_service_agent.workflow.entity.chat_state import create_chat_state
 from domain.customer_service_agent.workflow.nodes.history_fusion_node import history_fusion_node
-from domain.customer_service_agent.workflow.nodes.supervisor_node import supervisor_node
 
 
 class Response:
@@ -12,14 +11,14 @@ class Response:
         self.content = content
 
 
-def test_llm_unavailable_fails_closed_without_rule_route(monkeypatch) -> None:
+def test_llm_unavailable_fails_closed_without_rule_route(monkeypatch, run_supervisor) -> None:
     monkeypatch.setattr(
         supervisor_agent,
         "invoke_llm",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("offline")),
     )
 
-    result = asyncio.run(supervisor_node(
+    result = asyncio.run(run_supervisor(
         create_chat_state("user", "session", "取消订单 order-1")
     ))
 
@@ -28,7 +27,7 @@ def test_llm_unavailable_fails_closed_without_rule_route(monkeypatch) -> None:
     assert "模型暂时无法" in result["sub_results"]["supervisor"]
 
 
-def test_supervisor_can_answer_greeting_without_dispatch(monkeypatch) -> None:
+def test_supervisor_can_answer_greeting_without_dispatch(monkeypatch, run_supervisor) -> None:
     monkeypatch.setattr(
         supervisor_agent,
         "invoke_llm",
@@ -38,14 +37,14 @@ def test_supervisor_can_answer_greeting_without_dispatch(monkeypatch) -> None:
         ),
     )
 
-    result = asyncio.run(supervisor_node(create_chat_state("user", "session", "你好")))
+    result = asyncio.run(run_supervisor(create_chat_state("user", "session", "你好")))
 
     assert result["intent"] == "fallback"
     assert result["supervisor_decision"]["action"] == "finish"
     assert "请说明要查询或办理的具体业务" in result["sub_results"]["supervisor"]
 
 
-def test_reference_context_is_marked_as_data_not_current_confirmation(monkeypatch) -> None:
+def test_reference_context_is_marked_as_data_not_current_confirmation(monkeypatch, run_supervisor) -> None:
     captured = {}
 
     def invoke(messages, **_kwargs):
@@ -71,7 +70,7 @@ def test_reference_context_is_marked_as_data_not_current_confirmation(monkeypatc
     )
     state.update(history_fusion_node(state))
 
-    result = asyncio.run(supervisor_node(state))
+    result = asyncio.run(run_supervisor(state))
 
     assert captured["current_query"] == "你好"
     assert captured["conversation_context"]["recent_messages"] == [{
@@ -84,7 +83,7 @@ def test_reference_context_is_marked_as_data_not_current_confirmation(monkeypatc
     assert result["supervisor_decision"]["action"] == "finish"
 
 
-def test_out_of_scope_request_is_decided_by_llm(monkeypatch) -> None:
+def test_out_of_scope_request_is_decided_by_llm(monkeypatch, run_supervisor) -> None:
     monkeypatch.setattr(
         supervisor_agent,
         "invoke_llm",
@@ -94,7 +93,7 @@ def test_out_of_scope_request_is_decided_by_llm(monkeypatch) -> None:
         ),
     )
 
-    result = asyncio.run(supervisor_node(create_chat_state("user", "session", "我想开户")))
+    result = asyncio.run(run_supervisor(create_chat_state("user", "session", "我想开户")))
 
     assert result["intent"] == "fallback"
     assert result["sub_results"]["supervisor"] == "当前服务暂不支持开户。"

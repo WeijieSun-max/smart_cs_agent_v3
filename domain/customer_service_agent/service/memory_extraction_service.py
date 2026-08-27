@@ -7,7 +7,7 @@ from typing import Any
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from domain.customer_service_agent.memory.models import MemoryCandidate, MemoryType
+from domain.customer_service_agent.memory.models import MemoryCandidate
 from domain.customer_service_agent.memory.policy import MemoryPolicy, MemoryPolicyConfig
 from domain.shared.llm.llm_service import invoke_llm
 from pkg.config.settings import get_settings

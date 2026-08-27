@@ -8,6 +8,7 @@ FastAPI + LangGraph 的模块化单体，面向移联电信与商城客服。MyS
 - LLM Supervisor 是唯一意图与调度入口，最多进行三轮有界管理；统一调度 `knowledge_agent`、`telecom_agent`、`retail_agent`，支持依赖任务和独立只读任务并行。
 - 唯一 Skill 来源为 `skills/**/SKILL.md`；启动时只索引 frontmatter，选中后加载正文和显式 references，并冻结版本/哈希。
 - `telecom-plan-recommendation` 根据最近三个账期的流量、通话和确定性成本比较给出只读建议。
+- `retail-order-assistance` 负责本人订单历史、日期/商品/状态筛选、候选消歧和详情查询，并将工具权限收紧为只读订单工具。
 - Telecom：套餐/使用量查询、套餐变更、流量补充、漫游；通信故障永久为带文档版本和引用的 RAG 指导，不存在设备 adapter。
 - Retail：完整地址/联系电话查询、新增地址并设为默认、支付方式、商品/库存、订单、取消、地址/支付/商品修改、退货、换货、差价退款。
 - 所有业务数据库写操作统一进入 governed action：两次 active 用户查询、资源版本、冻结参数摘要、二次确认、幂等事务、回读回执及未知状态对账。
@@ -75,7 +76,7 @@ DB_PASSWORD=your-password
 DB_NAME=assist_gen
 ```
 
-各节点可分别通过 `QWEN_SUPERVISOR_MODEL`、`QWEN_KNOWLEDGE_AGENT_MODEL`、`QWEN_QUERY_REWRITER_MODEL`、`QWEN_TELECOM_AGENT_MODEL`、`QWEN_RETAIL_AGENT_MODEL`、`QWEN_RESPONSE_WRITER_MODEL`、`QWEN_SAFETY_GUARD_MODEL`、`QWEN_MEMORY_MODEL` 及对应的 `*_BASE_URL` 覆盖；留空继承 `QWEN_MODEL` / `QWEN_BASE_URL`。旧 `QWEN_TASK_PLANNER_*` 配置仍可作为 Supervisor 兼容回退，但不再存在规则分类器或独立规则 Planner 节点。
+各节点可分别通过 `QWEN_SUPERVISOR_MODEL`、`QWEN_KNOWLEDGE_AGENT_MODEL`、`QWEN_TELECOM_AGENT_MODEL`、`QWEN_RETAIL_AGENT_MODEL`、`QWEN_RESPONSE_WRITER_MODEL`、`QWEN_SAFETY_GUARD_MODEL`、`QWEN_MEMORY_MODEL` 及对应的 `*_BASE_URL` 覆盖；留空继承 `QWEN_MODEL` / `QWEN_BASE_URL`。意图识别与任务拆解均由 Supervisor LLM 完成，不再保留独立 Planner 或查询改写配置。
 
 Nginx 完成真实登录认证并覆盖外部身份头后，可设置：
 
@@ -125,7 +126,11 @@ npm run build  # 在 frontend 目录
 ```powershell
 python scripts/seed_demo_business_data.py          # 仅预览
 python scripts/seed_demo_business_data.py --apply  # 写入 .env 配置的 MySQL
+python scripts/seed_demo_business_data.py --usage-only --apply  # 仅补充套餐推荐账期数据
+python scripts/seed_demo_business_data.py --retail-history-only --apply  # 仅补充订单历史
 ```
+
+演示种子为每条电信线路生成当前账期和最近三个完整账期的流量/语音画像，并为每个用户生成四笔覆盖处理中、已完成、已取消等状态的订单历史，使套餐推荐和零售追问都有足够的关联数据。种子使用稳定业务键且重复执行不覆盖治理动作产生的业务状态。
 
 旧版本演示数据使用不可逆摘要保存联系人信息；升级后需要执行一次 `--apply`，才能查询旧演示用户的完整手机号和详细地址。新建地址不受此限制。
 

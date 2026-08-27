@@ -26,8 +26,6 @@ class ChatState(MessagesState):
     conversation_context: dict[str, Any]  # 结构化的 summary、recent_messages 与 memories，仅作不可信参考数据。
     user_message_persisted: bool  # 当前用户消息是否已成功写入持久化存储，避免重复保存。
     normalized_query: str  # 查询改写、指代消解后的独立问题；业务事实仍需由数据库验证。
-    query_understanding: dict[str, Any] | None  # 结构化领域、能力、实体、时间范围和歧义结果。
-    pending_action_handled: bool  # 本轮是否已由待确认操作门禁处理。
     domain_agent_results: dict[str, list[dict[str, Any]]]  # Knowledge/Telecom/Retail Agent 的结构化结果。
     intent: str | None  # 识别出的用户意图，用于路由到对应处理流程。
     sub_results: dict[str, Any]  # 子任务或子节点的中间处理结果集合。
@@ -43,9 +41,7 @@ class ChatState(MessagesState):
     request_id: str | None  # 外部请求追踪 ID，用于链路追踪与问题排查。
     identity_source: str  # 用户身份信息的来源，例如请求体、令牌或系统注入。
     auth_strength: str  # 身份认证强度或可信等级，供权限与风险判断使用。
-    route_decision: dict[str, Any] | None  # 路由决策详情，例如目标智能体、处理策略和原因。
-    task_plan: dict[str, Any] | None  # 复杂请求拆解出的执行计划。
-    task_results: dict[str, Any]  # 执行计划中各任务的处理结果集合。
+    task_results: dict[str, Any]  # Supervisor 分配的各 Agent 任务结果集合。
     supervisor_round: int  # 当前轮次内 Supervisor 已发起的调度批次数，最多三轮。
     supervisor_decision: dict[str, Any] | None  # Supervisor LLM 本轮结构化决策。
     agent_assignments: list[dict[str, Any]]  # 当前待执行的结构化 Agent 任务。
@@ -81,8 +77,6 @@ def create_chat_state(
         "user_message_persisted": user_message_persisted,
         "messages": [HumanMessage(content=query)],
         "normalized_query": query,
-        "query_understanding": None,
-        "pending_action_handled": False,
         "domain_agent_results": {},
         "intent": None,
         "sub_results": {},
@@ -98,8 +92,6 @@ def create_chat_state(
         "request_id": None,
         "identity_source": "request_body",
         "auth_strength": "unverified_frontend",
-        "route_decision": None,
-        "task_plan": None,
         "task_results": {},
         "supervisor_round": 0,
         "supervisor_decision": None,

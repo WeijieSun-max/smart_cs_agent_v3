@@ -6,7 +6,7 @@ from typing import Any
 from domain.customer_service_agent.tools.tool_registry import get_mcp_server
 
 # 能力词表的唯一事实来源：工具注册表（business_tools.py 的 @server.register 元数据）。
-# Supervisor、领域 Agent 与兼容执行器只从这里派生或校验能力，不维护关键词词表。
+# Supervisor 与领域 Agent 只从这里派生或校验能力，不维护关键词词表。
 
 # 非工具能力：不通过注册表工具执行，而是 RAG 或合成能力。
 NON_TOOL_CAPABILITIES = frozenset({"telecom_troubleshooting", "retail_policy", "fallback"})
@@ -34,7 +34,7 @@ class CapabilityIndex:
     write_tools_by_capability: dict[str, tuple[str, ...]]
 
     def allowed_read_tools(self, domain: str, agent_type: str) -> frozenset[str]:
-        """ReAct 只读工具白名单：域内 read 工具，且能力不是纯写意图（排除报价/预检工具）。"""
+        """领域 Agent 只读工具白名单，排除仅服务于写操作报价/预检的工具。"""
         write = self.write_capabilities
         result: set[str] = set()
         for tool in self.tools:
@@ -105,27 +105,20 @@ def get_capability_index() -> CapabilityIndex:
     return _index
 
 
-def reset_capability_index() -> None:
-    global _index
-    _index = None
-
-
 def validate_capability_contracts() -> list[str]:
-    """Validate tool mappings; supervisor vocabulary is derived dynamically."""
+    """Validate registry metadata used to build the Supervisor tool vocabulary."""
     index = get_capability_index()
     problems: list[str] = []
 
-    from domain.customer_service_agent.orchestration.tool_scheduler import CAPABILITY_TO_TOOL
-
-    # CAPABILITY_TO_TOOL 每个直连映射都必须指向声明了该能力的 read 工具。
-    for cap, tool_name in CAPABILITY_TO_TOOL.items():
-        read_tools = index.read_tools_by_capability.get(cap, ())
-        if tool_name not in read_tools:
-            problems.append(f"CAPABILITY_TO_TOOL[{cap}]={tool_name} is not a read tool for that capability")
-
-    # 每个写能力都必须有至少一个 write 工具（保证写意图可执行、可治理）。
-    for cap in index.write_capabilities:
-        if cap not in index.write_tools_by_capability:
-            problems.append(f"write capability has no write tool: {cap}")
+    for tool in index.tools:
+        if tool.effect not in {"read", "write"}:
+            problems.append(f"tool has invalid effect: {tool.name}={tool.effect}")
+        if tool.domain not in {"telecom", "retail", "shared"}:
+            problems.append(f"tool has invalid domain: {tool.name}={tool.domain}")
+        if not tool.capabilities:
+            problems.append(f"tool has no capabilities: {tool.name}")
+        expected_agent = f"{tool.domain}_agent"
+        if tool.domain in {"telecom", "retail"} and expected_agent not in tool.allowed_agent_types:
+            problems.append(f"tool is not assigned to {expected_agent}: {tool.name}")
 
     return problems

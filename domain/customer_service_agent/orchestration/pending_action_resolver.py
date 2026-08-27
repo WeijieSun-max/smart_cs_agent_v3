@@ -5,7 +5,6 @@ import json
 from typing import Any, Literal
 
 from domain.action_governance import get_action_service
-from domain.customer_service_agent.orchestration.state_updates import build_supervisor_result
 from domain.customer_service_agent.workflow.entity.chat_state import ChatState
 from domain.shared.identity import RequestIdentityContext
 
@@ -28,7 +27,7 @@ async def resolve_pending_action(
         return None
     if decision == "confirm_action":
         completed = await actions.confirm(identity)
-        return build_supervisor_result(
+        return _build_result(
             state,
             "action_confirmation",
             _action_result_text(completed.status, completed.impact_summary, completed.receipt),
@@ -36,17 +35,33 @@ async def resolve_pending_action(
         )
     if decision == "reject_action":
         rejected = await asyncio.to_thread(actions.reject, identity)
-        return build_supervisor_result(
+        return _build_result(
             state,
             "action_rejection",
             f"已取消操作：{rejected.impact_summary}。",
             task_results={"action": rejected.model_dump(mode="json")},
         )
-    return build_supervisor_result(
+    return _build_result(
         state,
         "action_pending",
         f"当前有待确认操作：{active.impact_summary}\n请仅回复“确认”执行，或回复“取消”。原参数不会因确认消息而改变。",
     )
+
+
+def _build_result(
+    state: ChatState,
+    intent: str,
+    text: str,
+    *,
+    task_results: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return {
+        "intent": intent,
+        "current_agent": "action_governance",
+        "sub_results": {**state.get("sub_results", {}), "supervisor": text},
+        "task_results": task_results or {},
+        "node_logs": [f"Pending action resolved: {intent}"],
+    }
 
 
 def _action_result_text(status: str, summary: str, receipt: dict[str, Any] | None) -> str:

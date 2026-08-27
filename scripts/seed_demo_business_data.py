@@ -75,6 +75,28 @@ def _id(prefix: str, index: int) -> str:
     return f"{prefix}{index:0{26 - len(prefix)}d}"
 
 
+def _month_start(value: datetime, offset: int = 0) -> datetime:
+    month_index = value.year * 12 + value.month - 1 + offset
+    year, month_zero_based = divmod(month_index, 12)
+    return value.replace(
+        year=year,
+        month=month_zero_based + 1,
+        day=1,
+        hour=0,
+        minute=0,
+        second=0,
+        microsecond=0,
+    )
+
+
+def _month_end(value: datetime) -> datetime:
+    return _month_start(value, 1) - timedelta(microseconds=1)
+
+
+def _usage_id(line_index: int, cycle_start: datetime) -> str:
+    return f"use{cycle_start:%Y%m}{line_index:017d}"
+
+
 def _digest(value: str) -> bytes:
     return hashlib.sha256(value.encode("utf-8")).digest()
 
@@ -89,15 +111,19 @@ TABLE_ORDER = (
     "rt_products", "rt_product_variants", "rt_inventory", "rt_orders",
     "rt_order_items", "rt_order_addresses", "rt_order_payments",
 )
+RETAIL_HISTORY_TABLES = (
+    "rt_orders",
+    "rt_order_items",
+    "rt_order_addresses",
+    "rt_order_payments",
+)
 
 
 def build_seed_rows(now: datetime | None = None, count: int = SEED_COUNT) -> dict[str, list[tuple[Any, ...]]]:
     if count < 1 or count > SEED_COUNT:
         raise ValueError(f"count must be between 1 and {SEED_COUNT}")
     now = (now or datetime.now(timezone.utc)).replace(tzinfo=None, microsecond=0)
-    cycle_start = now.replace(day=1, hour=0, minute=0, second=0)
-    next_month = (cycle_start.replace(day=28) + timedelta(days=4)).replace(day=1)
-    cycle_end = next_month - timedelta(microseconds=1)
+    cycle_start = _month_start(now)
     rows: dict[str, list[tuple[Any, ...]]] = {name: [] for name in TABLE_ORDER}
 
     for i in range(1, count + 1):
@@ -143,19 +169,37 @@ def build_seed_rows(now: datetime | None = None, count: int = SEED_COUNT) -> dic
             Decimal("0.15"), Decimal("5.00" if i >= 10 else "10.00"), 50 * 1024,
             i >= 6, plan_status, now - timedelta(days=365), None, now, now,
         ))
+        current_plan_index = ((i + 3) % 18) + 1
         rows["tc_lines"].append((
             _id("lin", i), _id("acc", i), _opaque(phone), _digest(phone),
-            "active" if i <= 18 else "suspended", _id("pln", ((i + 3) % 18) + 1), i % 4 == 0,
+            "active" if i <= 18 else "suspended", _id("pln", current_plan_index), i % 4 == 0,
             now + timedelta(days=90 + i), now - timedelta(days=60 + i), 1,
             now - timedelta(days=180 - i), now,
         ))
-        included_mb = [5, 8, 10, 15, 20, 25, 30, 40, 50, 60, 80, 100, 120, 150, 180, 200, 300, 500][((i + 3) % 18)] * 1024
-        used_mb = min(included_mb + 2048, 1800 + i * 2350)
-        rows["tc_usage_cycles"].append((
-            _id("use", i), _id("lin", i), cycle_start, cycle_end, included_mb, used_mb,
-            1024 if i % 6 == 0 else 0, 100 + i * 50, 35 + i * 37, 8 + i * 3,
-            1 if i % 6 == 0 else 0, 1, now,
-        ))
+        active_data_gb = [5, 8, 10, 15, 20, 25, 30, 40, 50, 60, 80, 100, 120, 150, 180, 200, 300, 500]
+        active_voice_minutes = [100, 100, 150, 200, 200, 300, 300, 400, 500, 600, 700, 800, 1000, 1200, 1500, 1800, 2000, 3000]
+        included_mb = active_data_gb[current_plan_index - 1] * 1024
+        included_voice = active_voice_minutes[current_plan_index - 1]
+        demand_ratio = (1.25, 0.82, 0.62, 1.05)[(i - 1) % 4]
+        for months_ago, trend in ((3, 0.90), (2, 1.00), (1, 1.08), (0, 1.12)):
+            usage_start = _month_start(cycle_start, -months_ago)
+            usage_end = _month_end(usage_start)
+            projected_data = round(included_mb * demand_ratio * trend)
+            projected_voice = round(included_voice * (0.45 + (i % 5) * 0.12) * trend)
+            if months_ago == 0:
+                elapsed_ratio = min(1.0, now.day / usage_end.day)
+                used_mb = round(projected_data * elapsed_ratio)
+                used_voice = round(projected_voice * elapsed_ratio)
+            else:
+                used_mb = projected_data
+                used_voice = projected_voice
+            refuel_count = 1 if used_mb > included_mb else 0
+            rows["tc_usage_cycles"].append((
+                _usage_id(i, usage_start), _id("lin", i), usage_start, usage_end,
+                included_mb, used_mb, 1024 if refuel_count else 0,
+                included_voice, used_voice, max(1, round(used_voice / 4)),
+                refuel_count, 1, now,
+            ))
 
         product_name, category, description, product_price = PRODUCTS[i - 1]
         product_status = "active" if i <= 19 else "discontinued"
@@ -170,37 +214,59 @@ def build_seed_rows(now: datetime | None = None, count: int = SEED_COUNT) -> dic
         ))
         rows["rt_inventory"].append((_id("var", i), 15 + i * 4, i % 5, 1, now))
 
-        quantity = 2 if i % 7 == 0 else 1
-        item_total = product_price * quantity
-        shipping = Decimal("0.00") if item_total >= 199 else Decimal("10.00")
-        discount = Decimal("20.00") if i % 5 == 0 else Decimal("0.00")
-        grand_total = item_total + shipping - discount
-        order_status = ("pending", "paid", "shipped", "delivered", "cancelled")[(i - 1) % 5]
-        placed_at = now - timedelta(days=i * 2)
-        rows["rt_orders"].append((
-            _id("ord", i), f"DEMO{now:%Y%m}{i:06d}", user_id, order_status,
-            item_total, shipping, discount, grand_total, "CNY",
-            "用户改变购买计划" if order_status == "cancelled" else None, False, 1,
-            placed_at, placed_at, now,
-        ))
-        rows["rt_order_items"].append((
-            _id("itm", i), _id("ord", i), _id("prd", i), _id("var", i), f"DEMO-SKU-{i:03d}",
-            product_name, attributes, product_price, quantity, 0, 0, "active", 1,
-        ))
-        address_snapshot = json.dumps({
-            "recipient": NAMES[i - 1], "phone_masked": f"138****{phone[-4:]}",
-            "province": province, "city": city, "district": district,
-            "detail": f"演示路{i}号{i}单元{i}室", "postal_code": postal_code,
-        }, ensure_ascii=False)
-        rows["rt_order_addresses"].append((
-            _id("oad", i), _id("ord", i), "shipping", _id("adr", i),
-            address_snapshot, 1, placed_at, now,
-        ))
-        payment_status = "refunded" if order_status == "cancelled" else ("authorized" if order_status == "pending" else "paid")
-        rows["rt_order_payments"].append((
-            _id("opm", i), _id("ord", i), _id("pay", i), grand_total, "CNY",
-            payment_status, 1, placed_at, now,
-        ))
+        for history_slot in range(4):
+            record_index = history_slot * SEED_COUNT + i
+            product_index = ((i - 1 + history_slot * 5) % count) + 1
+            order_product_name, _, _, order_product_price = PRODUCTS[product_index - 1]
+            order_attributes = json.dumps({
+                "颜色": ("曜石黑", "云杉绿", "星河银")[(product_index + history_slot) % 3],
+                "版本": "标准版",
+            }, ensure_ascii=False)
+            quantity = 2 if record_index % 7 == 0 else 1
+            item_total = order_product_price * quantity
+            shipping = Decimal("0.00") if item_total >= 199 else Decimal("10.00")
+            discount = Decimal("20.00") if record_index % 5 == 0 else Decimal("0.00")
+            grand_total = item_total + shipping - discount
+            if history_slot == 0:
+                order_status = ("pending", "paid", "shipped", "delivered", "cancelled")[(i - 1) % 5]
+                placed_at = now - timedelta(days=i * 2)
+                order_no = f"DEMO{now:%Y%m}{i:06d}"
+            else:
+                order_status = ("delivered", "processed", "cancelled")[history_slot - 1]
+                placed_at = now - timedelta(days=(history_slot * 14) + i)
+                order_no = f"DEMO-HIST-{record_index:06d}"
+            rows["rt_orders"].append((
+                _id("ord", record_index), order_no, user_id, order_status,
+                item_total, shipping, discount, grand_total, "CNY",
+                "用户改变购买计划" if order_status == "cancelled" else None, False, 1,
+                placed_at, placed_at, now,
+            ))
+            rows["rt_order_items"].append((
+                _id("itm", record_index), _id("ord", record_index),
+                _id("prd", product_index), _id("var", product_index),
+                f"DEMO-SKU-{product_index:03d}", order_product_name, order_attributes,
+                order_product_price, quantity, 0, 0, "active", 1,
+            ))
+            address_snapshot = json.dumps({
+                "recipient": NAMES[i - 1], "phone_masked": f"138****{phone[-4:]}",
+                "province": province, "city": city, "district": district,
+                "detail": f"演示路{i}号{i}单元{i}室", "postal_code": postal_code,
+            }, ensure_ascii=False)
+            rows["rt_order_addresses"].append((
+                _id("oad", record_index), _id("ord", record_index), "shipping", _id("adr", i),
+                address_snapshot, 1, placed_at, now,
+            ))
+            payment_status = (
+                "refunded"
+                if order_status == "cancelled"
+                else "authorized"
+                if order_status == "pending"
+                else "paid"
+            )
+            rows["rt_order_payments"].append((
+                _id("opm", record_index), _id("ord", record_index), _id("pay", i),
+                grand_total, "CNY", payment_status, 1, placed_at, now,
+            ))
 
     return rows
 
@@ -214,7 +280,7 @@ INSERT_SQL = {
     "tc_wallets": "INSERT INTO tc_wallets (wallet_id,account_id,available_balance,currency,version,updated_at) VALUES (%s,%s,%s,%s,%s,%s) ON DUPLICATE KEY UPDATE wallet_id=VALUES(wallet_id)",
     "tc_plans": "INSERT INTO tc_plans (plan_id,plan_code,version_no,name,description,monthly_price,currency,data_limit_mb,data_unlimited,included_voice_minutes,voice_unlimited,voice_overage_price_per_minute,refuel_price_per_gb,max_refuel_mb_per_cycle,roaming_supported,status,effective_from,effective_to,created_at,updated_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON DUPLICATE KEY UPDATE plan_id=VALUES(plan_id)",
     "tc_lines": "INSERT INTO tc_lines (line_id,account_id,msisdn_cipher,msisdn_hash,status,current_plan_id,roaming_enabled,contract_end_at,last_plan_change_at,version,created_at,updated_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON DUPLICATE KEY UPDATE msisdn_cipher=VALUES(msisdn_cipher),msisdn_hash=VALUES(msisdn_hash)",
-    "tc_usage_cycles": "INSERT INTO tc_usage_cycles (usage_id,line_id,cycle_start,cycle_end,included_data_mb,used_data_mb,refueled_data_mb,included_voice_minutes,used_voice_minutes,outgoing_call_count,refuel_count,version,updated_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON DUPLICATE KEY UPDATE usage_id=VALUES(usage_id)",
+    "tc_usage_cycles": "INSERT INTO tc_usage_cycles (usage_id,line_id,cycle_start,cycle_end,included_data_mb,used_data_mb,refueled_data_mb,included_voice_minutes,used_voice_minutes,outgoing_call_count,refuel_count,version,updated_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON DUPLICATE KEY UPDATE line_id=VALUES(line_id)",
     "rt_products": "INSERT INTO rt_products (product_id,product_code,name,category,description,status,version,created_at,updated_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s) ON DUPLICATE KEY UPDATE product_id=VALUES(product_id)",
     "rt_product_variants": "INSERT INTO rt_product_variants (variant_id,product_id,sku,attributes_json,price,currency,status,version,created_at,updated_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON DUPLICATE KEY UPDATE variant_id=VALUES(variant_id)",
     "rt_inventory": "INSERT INTO rt_inventory (variant_id,available_qty,reserved_qty,version,updated_at) VALUES (%s,%s,%s,%s,%s) ON DUPLICATE KEY UPDATE variant_id=VALUES(variant_id)",
@@ -225,7 +291,13 @@ INSERT_SQL = {
 }
 
 
-def apply_seed(rows: dict[str, list[tuple[Any, ...]]]) -> dict[str, int]:
+def apply_seed(
+    rows: dict[str, list[tuple[Any, ...]]],
+    *,
+    tables: tuple[str, ...] = TABLE_ORDER,
+) -> dict[str, int]:
+    if not tables or any(table not in TABLE_ORDER for table in tables):
+        raise ValueError("tables must be a non-empty subset of TABLE_ORDER")
     settings = get_settings()
     connection = pymysql.connect(
         host=settings.db_host, port=settings.db_port, user=settings.db_user,
@@ -237,14 +309,14 @@ def apply_seed(rows: dict[str, list[tuple[Any, ...]]]) -> dict[str, int]:
         with connection.cursor() as cursor:
             _reconcile_session_schema(cursor)
             connection.commit()
-            for table in TABLE_ORDER:
+            for table in tables:
                 try:
                     cursor.executemany(INSERT_SQL[table], rows[table])
                 except Exception as exc:
                     raise RuntimeError(f"failed to seed table {table}: {exc}") from exc
             connection.commit()
             counts: dict[str, int] = {}
-            for table in TABLE_ORDER:
+            for table in tables:
                 cursor.execute(f"SELECT COUNT(*) AS count FROM {table}")
                 counts[table] = int(cursor.fetchone()["count"])
             return counts
@@ -291,20 +363,37 @@ def inspect_schema() -> dict[str, list[str]]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Seed synthetic telecom/retail business data")
-    parser.add_argument("--count", type=int, default=SEED_COUNT, help="rows per primary table (1-20)")
+    parser.add_argument("--count", type=int, default=SEED_COUNT, help="number of demo users (1-20)")
     parser.add_argument("--apply", action="store_true", help="write to the configured MySQL database")
     parser.add_argument("--inspect", action="store_true", help="print actual columns of target tables")
+    scope = parser.add_mutually_exclusive_group()
+    scope.add_argument(
+        "--usage-only",
+        action="store_true",
+        help="seed only telecom usage cycles without touching unrelated demo records",
+    )
+    scope.add_argument(
+        "--retail-history-only",
+        action="store_true",
+        help="seed only retail order history without touching unrelated demo records",
+    )
     args = parser.parse_args()
     if args.inspect:
         print(json.dumps(inspect_schema(), ensure_ascii=False, indent=2))
         return 0
     rows = build_seed_rows(count=args.count)
+    if args.usage_only:
+        tables = ("tc_usage_cycles",)
+    elif args.retail_history_only:
+        tables = RETAIL_HISTORY_TABLES
+    else:
+        tables = TABLE_ORDER
     if not args.apply:
-        print(json.dumps({table: len(values) for table, values in rows.items()}, ensure_ascii=False, indent=2))
+        print(json.dumps({table: len(rows[table]) for table in tables}, ensure_ascii=False, indent=2))
         print("Dry run only. Add --apply to write the configured database.")
         return 0
-    counts = apply_seed(rows)
-    print(json.dumps({"seeded": {table: len(rows[table]) for table in TABLE_ORDER}, "database_counts": counts}, ensure_ascii=False, indent=2))
+    counts = apply_seed(rows, tables=tables)
+    print(json.dumps({"seeded": {table: len(rows[table]) for table in tables}, "database_counts": counts}, ensure_ascii=False, indent=2))
     return 0
 
 

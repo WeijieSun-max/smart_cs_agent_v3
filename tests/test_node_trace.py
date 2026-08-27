@@ -124,12 +124,12 @@ def test_debug_serializer_redacts_structured_context_inside_llm_json_prompt() ->
 def test_node_trace_recorder_maps_node_and_multiple_model_calls() -> None:
     recorder = NodeTraceRecorder("turn-1")
 
-    node_start = recorder.consume(_node_event("on_chain_start", "node-1", "supervisor_node", {"raw_query": "hello"}))
+    node_start = recorder.consume(_node_event("on_chain_start", "node-1", "supervisor_manager_node", {"raw_query": "hello"}))
     model_1_start = recorder.consume({
         "event": "on_chat_model_start",
         "name": "ChatOpenAI",
         "run_id": "model-1",
-        "metadata": {"langgraph_node": "supervisor_node"},
+        "metadata": {"langgraph_node": "supervisor_manager_node"},
         "parent_ids": ["root", "node-1"],
         "data": {"input": {"messages": [[SystemMessage(content="route"), HumanMessage(content="hello")]]}},
     })
@@ -137,7 +137,7 @@ def test_node_trace_recorder_maps_node_and_multiple_model_calls() -> None:
         "event": "on_chat_model_end",
         "name": "ChatOpenAI",
         "run_id": "model-1",
-        "metadata": {"langgraph_node": "supervisor_node"},
+        "metadata": {"langgraph_node": "supervisor_manager_node"},
         "parent_ids": ["root", "node-1"],
         "data": {"output": AIMessage(content='{"intent":"knowledge"}')},
     })
@@ -145,7 +145,7 @@ def test_node_trace_recorder_maps_node_and_multiple_model_calls() -> None:
         "event": "on_chat_model_start",
         "name": "ChatOpenAI",
         "run_id": "model-2",
-        "metadata": {"langgraph_node": "supervisor_node"},
+        "metadata": {"langgraph_node": "supervisor_manager_node"},
         "parent_ids": ["node-1"],
         "data": {"input": {"messages": [[HumanMessage(content="second")]]}},
     })
@@ -153,11 +153,11 @@ def test_node_trace_recorder_maps_node_and_multiple_model_calls() -> None:
         "event": "on_chat_model_end",
         "name": "ChatOpenAI",
         "run_id": "model-2",
-        "metadata": {"langgraph_node": "supervisor_node"},
+        "metadata": {"langgraph_node": "supervisor_manager_node"},
         "parent_ids": ["node-1"],
         "data": {"output": AIMessage(content="second response")},
     })
-    node_end = recorder.consume(_node_event("on_chain_end", "node-1", "supervisor_node", {"intent": "knowledge"}))
+    node_end = recorder.consume(_node_event("on_chain_end", "node-1", "supervisor_manager_node", {"intent": "knowledge"}))
 
     events = [node_start, model_1_start, model_1_end, model_2_start, model_2_end, node_end]
     assert [event["phase"] for event in events] == [

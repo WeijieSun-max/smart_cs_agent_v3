@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from domain.customer_service_agent.file_skills import get_catalog, initialize_catalog
+from domain.customer_service_agent.file_skills import initialize_catalog
 from domain.customer_service_agent.tools.tool_registry import get_mcp_server
 from pkg.config.settings import get_settings
 

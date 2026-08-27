@@ -40,10 +40,6 @@ class LocalKnowledgeStore(IKnowledgeStore):
         self._embedding_status = "degraded" if embedding_provider is None else "configured"
         self._load_metadata()
 
-    @property
-    def embedding_status(self) -> str:
-        return self._embedding_status
-
     def health_status(self) -> dict[str, Any]:
         return {
             "status": self._embedding_status,
@@ -160,14 +156,6 @@ class LocalKnowledgeStore(IKnowledgeStore):
             item["score"] = float(combined)
             reranked.append(item)
         return sorted(reranked, key=lambda item: item["score"], reverse=True)
-
-    def save(self) -> None:
-        self.index_path.parent.mkdir(parents=True, exist_ok=True)
-        self.index_path.with_suffix(".meta.json").write_text(
-            json.dumps(self._documents, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-
 
 def _terms(text: str) -> list[str]:
     normalized = unicodedata.normalize("NFKC", text).lower()

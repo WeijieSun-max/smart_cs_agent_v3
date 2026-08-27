@@ -2,21 +2,19 @@ from domain.customer_service_agent.orchestration.capability_index import (
     get_capability_index,
     validate_capability_contracts,
 )
-from domain.customer_service_agent.orchestration.router import WRITE_CAPABILITIES
 
 
 def test_write_capabilities_are_derived_from_registry() -> None:
     index = get_capability_index()
 
-    assert WRITE_CAPABILITIES == index.write_capabilities
-    assert "cancel_order" in WRITE_CAPABILITIES
-    assert "request_return" in WRITE_CAPABILITIES
+    assert "cancel_order" in index.write_capabilities
+    assert "request_return" in index.write_capabilities
     # 写意图的能力，每个都有对应 write 工具。
     for cap in index.write_capabilities:
         assert cap in index.write_tools_by_capability
 
 
-def test_react_allowlist_excludes_write_intent_quote_tools() -> None:
+def test_agent_read_allowlist_excludes_write_intent_quote_tools() -> None:
     index = get_capability_index()
 
     telecom = index.allowed_read_tools("telecom", "telecom_agent")
