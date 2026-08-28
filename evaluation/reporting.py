@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import json
+import math
+import re
 from pathlib import Path
 from typing import Any
+
+from pydantic import BaseModel
 
 from pkg.telemetry.langfuse_observability import redact_sensitive_text
 
@@ -14,6 +18,7 @@ _PII_KEYS = {
     "detail",
     "full_address",
 }
+_OPAQUE_DIGEST = re.compile(r"^(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})$")
 
 
 def summarize_results(results: list[Any]) -> dict[str, Any]:
@@ -37,8 +42,13 @@ def summarize_results(results: list[Any]) -> dict[str, Any]:
         "passed": passed,
         "failed": total - passed,
         "pass_rate": passed / total if total else 1.0,
+        "pass_rate_ci95": wilson_interval(passed, total),
         "component_pass_rates": {
             name: sum(values) / len(values)
+            for name, values in sorted(component_values.items())
+        },
+        "component_pass_rate_ci95": {
+            name: wilson_interval(sum(values), len(values))
             for name, values in sorted(component_values.items())
         },
         "llm_calls": {
@@ -73,6 +83,12 @@ def reliability_metrics(results: list[Any]) -> dict[str, Any]:
         "task_count": len(repeated),
         "pass_at_k": sum(any(values) for values in repeated.values()) / len(repeated),
         "pass_power_k": sum(all(values) for values in repeated.values()) / len(repeated),
+        "pass_at_k_ci95": wilson_interval(
+            sum(any(values) for values in repeated.values()), len(repeated)
+        ),
+        "pass_power_k_ci95": wilson_interval(
+            sum(all(values) for values in repeated.values()), len(repeated)
+        ),
         "per_task": {
             case_id: {
                 "trials": len(values),
@@ -85,16 +101,56 @@ def reliability_metrics(results: list[Any]) -> dict[str, Any]:
     }
 
 
-def write_json_report(path: Path, results: list[Any]) -> None:
+def write_json_report(
+    path: Path,
+    results: list[Any],
+    *,
+    manifest: BaseModel | dict[str, Any] | None = None,
+) -> None:
     payload = {
         "summary": summarize_results(results),
         "results": [_sanitize_report_value(item.model_dump(mode="python")) for item in results],
     }
+    if manifest is not None:
+        raw_manifest = manifest.model_dump(mode="python") if isinstance(manifest, BaseModel) else manifest
+        payload["manifest"] = _sanitize_report_value(raw_manifest)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2, default=str),
         encoding="utf-8",
     )
+
+
+def wilson_interval(
+    successes: float,
+    total: int,
+    *,
+    z: float = 1.959963984540054,
+) -> dict[str, float | int]:
+    """Two-sided 95% Wilson score interval for a Bernoulli pass rate."""
+
+    if total < 0:
+        raise ValueError("total cannot be negative")
+    if successes < 0 or successes > total:
+        raise ValueError("successes must be between zero and total")
+    if total == 0:
+        return {"low": 0.0, "high": 1.0, "n": 0}
+    proportion = successes / total
+    denominator = 1 + (z * z / total)
+    center = (proportion + z * z / (2 * total)) / denominator
+    margin = (
+        z
+        * math.sqrt(
+            proportion * (1 - proportion) / total
+            + z * z / (4 * total * total)
+        )
+        / denominator
+    )
+    return {
+        "low": round(max(0.0, center - margin), 6),
+        "high": round(min(1.0, center + margin), 6),
+        "n": total,
+    }
 
 
 def _percentile(values: list[float] | list[int], quantile: float) -> float:
@@ -119,6 +175,8 @@ def _sanitize_report_value(value: Any, *, key: str = "") -> Any:
     if isinstance(value, bytes):
         return "[REDACTED_BINARY]"
     if isinstance(value, str):
+        if _OPAQUE_DIGEST.fullmatch(value):
+            return value
         return redact_sensitive_text(value)
     if hasattr(value, "isoformat"):
         try:
@@ -126,3 +184,9 @@ def _sanitize_report_value(value: Any, *, key: str = "") -> Any:
         except (TypeError, ValueError):
             pass
     return value
+
+
+def sanitize_report_value(value: Any) -> Any:
+    """Public report sanitizer for auxiliary evaluation report formats."""
+
+    return _sanitize_report_value(value)

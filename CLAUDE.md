@@ -11,6 +11,8 @@ This file is the developer guide for the telecom/retail customer-service platfor
 - Evaluation smoke suite: `python -m evaluation.harness evaluation/fixtures/smoke_cases.json`
 - Versioned gold tasks: `python -m evaluation.harness evaluation/datasets/dev/gold_cases.json`
 - Repeated reliability run: `python -m evaluation.harness evaluation/datasets/dev/gold_cases.json --trials 3 --json-output evaluation/reports/dev.json`
+- Prefix evaluation contracts: `evaluation/datasets/dev/prefix_cases.json` (`smart-cs-prefix-eval/v1`)
+- Prefix verifier smoke: `python -m evaluation.prefix_harness evaluation/datasets/dev/prefix_cases.json --decisions evaluation/datasets/dev/prefix_candidate_decisions.json`
 - Frontend checks (from `frontend/`): `npm run lint`, `npm run build`
 
 Runtime configuration comes from the project-root `.env`. Never print or commit it; use `.env.example` for placeholders.

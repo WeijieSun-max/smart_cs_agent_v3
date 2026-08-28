@@ -1,0 +1,30 @@
+{
+  "prefix.pending.ambiguous.clarify.001": {
+    "action": "clarify",
+    "clarification_question": "请明确回复确认执行或取消当前套餐变更"
+  },
+  "prefix.pending.explicit_confirm.001": {
+    "action": "confirm_action"
+  },
+  "prefix.telecom.read.multiple_valid.001": {
+    "action": "dispatch",
+    "assignments": [
+      {
+        "task_id": "T1",
+        "agent": "telecom_agent",
+        "capability": "usage",
+        "arguments": {}
+      }
+    ]
+  },
+  "prefix.agent.write.must_propose.001": {
+    "action": "propose_write",
+    "tool_name": "telecom_change_plan",
+    "arguments": {
+      "line_id": "L1",
+      "plan_id": "P2",
+      "expected_version": 1
+    },
+    "impact_summary": "将线路 L1 从当前套餐变更为 P2"
+  }
+}

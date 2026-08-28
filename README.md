@@ -145,7 +145,18 @@ python scripts/seed_demo_business_data.py --retail-history-only --apply  # 仅�
 python -m evaluation.harness evaluation/fixtures/smoke_cases.json
 python -m evaluation.harness evaluation/datasets/dev/gold_cases.json
 python -m evaluation.harness evaluation/datasets/dev/gold_cases.json --trials 3 --json-output evaluation/reports/dev.json
+python -m evaluation.prefix_harness evaluation/datasets/dev/prefix_cases.json --decisions evaluation/datasets/dev/prefix_candidate_decisions.json --json-output evaluation/reports/prefix-dev.json
 ```
 
-重复 trial 的报告同时给出 `Pass@k`（至少一次通过）与 `Pass^k`（每次都通过）。
+重复 trial 的报告同时给出 `Pass@k`（至少一次通过）、`Pass^k`（每次都通过）和 Wilson 95% 置信区间；JSON 报告还包含 Git SHA、数据集 SHA-256 与 migration SHA-256 manifest。
+
+冻结轨迹前缀任务位于 `evaluation/datasets/dev/prefix_cases.json`，采用
+`smart-cs-prefix-eval/v1`。`evaluation.prefix.verify_prefix_decision` 按“任一允许动作命中且无禁止动作命中”判分；`run_supervisor_prefix_async` 可在外部初始化模型后直接评估真实 Supervisor 决策。真实多轮评测使用 `evaluation.runners.LiveConversationRunner` 注入应用 turn executor、用户模拟器和隔离环境。MySQL adapter 只接受 `smart_cs_eval_` 前缀的专用库，且没有显式 scoped resetter 时拒绝运行。
+
+如需直接评估已配置的真实 Supervisor，可运行：
+
+```powershell
+python -m evaluation.prefix_harness evaluation/datasets/dev/prefix_cases.json --live-supervisor --decision-level supervisor --json-output evaluation/reports/prefix-live.json
+```
+
 完整的目标架构、数据集规模和发布门禁见 `evaluation/EVALUATION_PLAN.md`。

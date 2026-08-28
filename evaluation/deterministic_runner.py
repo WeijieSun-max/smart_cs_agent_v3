@@ -28,6 +28,7 @@ from domain.shared.identity import RequestIdentityContext
 from domain.shared.llm.llm_service import initialize_llm_client
 from evaluation.harness import EvaluationCase, RunOutcome
 from evaluation.schema import EvaluationTask
+from evaluation.simulators import ScriptedUserSimulator
 from infra.knowledge.local_knowledge_store import LocalKnowledgeStore
 
 _BACKEND_ROOT = Path(__file__).resolve().parents[1]
@@ -379,16 +380,21 @@ def run_task_conversation(task: EvaluationTask) -> RunOutcome:
     session_id = f"eval-{task.id}-{run_id[:8]}"
     thread_id = f"{task.user_id}:{session_id}"
     environment_before = _store.evaluation_snapshot()
-    scripts = [(task.ticket, task.llm_script), *(
-        (turn.message, turn.llm_script)
-        for turn in task.user_scenario.scripted_turns
-    )]
+    simulator = ScriptedUserSimulator()
+    simulator.reset(task, environment_before)
+    message = task.ticket
+    script = task.llm_script
+    max_turns = task.evaluation_criteria.budgets.max_turns or (
+        1 + len(task.user_scenario.scripted_turns)
+    )
     all_llm_calls: list[str] = []
     turn_results: list[dict[str, Any]] = []
     final: dict[str, Any] = {}
     started = time.perf_counter()
 
-    for turn_index, (message, script) in enumerate(scripts):
+    last_turn_index = 0
+    for turn_index in range(max_turns):
+        last_turn_index = turn_index
         _llm.reset(script)
         turn_id = f"eval-{run_id[:10]}-{turn_index}"
         state = create_chat_state(
@@ -412,12 +418,21 @@ def run_task_conversation(task: EvaluationTask) -> RunOutcome:
             "assistant_message": assistant_message,
             "intent": final.get("intent"),
         })
+        user_decision = simulator.next_turn(
+            assistant_message,
+            _store.evaluation_snapshot(),
+        )
+        turn_results[-1]["simulator_stop_reason"] = user_decision.reason
+        if user_decision.stop:
+            break
+        message = user_decision.message or ""
+        script = user_decision.llm_script
 
     elapsed_ms = (time.perf_counter() - started) * 1000
     identity = RequestIdentityContext(
         user_id=task.user_id,
         session_id=session_id,
-        turn_id=f"eval-{run_id[:10]}-{len(scripts) - 1}",
+        turn_id=f"eval-{run_id[:10]}-{last_turn_index}",
     )
     try:
         active = _actions.get_active(identity)

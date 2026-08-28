@@ -208,14 +208,19 @@ Judge 只评价澄清是否充分、故障说明是否清晰、失败回复是�
 - [x] 单轮和 scripted 多轮 runner，已覆盖提案后确认执行。
 - [x] JSON 报告、组件通过率、`Pass@k` 和 `Pass^k`。
 - [x] 首批 dev gold tasks 和评测框架测试。
+- [x] `smart-cs-prefix-eval/v1` 冻结轨迹前缀 Schema；允许多个正确动作，并单独检查禁止动作。
+- [x] Scripted 与 grounded LLM user simulator 协议；grounded simulator 用显式事实账本拒绝新增或篡改事实。
+- [x] 可注入真实模型/应用 turn executor 的 live conversation runner。
+- [x] MySQL 隔离环境安全 adapter：强制 `smart_cs_eval_` 库名前缀、连接库复核、显式 scoped resetter。
+- [x] 运行 manifest（Git、数据集和 migration 哈希）与 Wilson 95% 置信区间。
 
 ### 下一阶段
 
-- [ ] MySQL 隔离评测环境和真实 SQL 状态投影。
-- [ ] 真实模型 runner 与 grounded LLM user simulator。
-- [ ] 轨迹前缀数据模型和执行器。
+- [ ] 为 MySQL adapter 提供 CI 专用库的建库/迁移/fixture reset 脚本，并接入真实 SQL 状态投影。
+- [ ] 将 live runner 接到应用 ChatService 和真实模型配置，在 nightly 环境执行。
+- [ ] 扩充轨迹前缀 gold set，覆盖全部 supervisor/domain-agent 决策边界。
 - [ ] 160 个模板/480 个固定实例。
-- [ ] Judge 校准、置信区间、成本和 TTFT。
+- [ ] Judge 校准、成本和 TTFT。
 - [ ] PR/nightly/release 自动化和 shadow/canary 回流。
 
 ## 10. 命令
@@ -225,6 +230,7 @@ python -m pytest tests
 python -m evaluation.harness evaluation/fixtures/smoke_cases.json
 python -m evaluation.harness evaluation/datasets/dev/gold_cases.json
 python -m evaluation.harness evaluation/datasets/dev/gold_cases.json --trials 3 --json-output evaluation/reports/dev.json
+python -m evaluation.prefix_harness evaluation/datasets/dev/prefix_cases.json --decisions evaluation/datasets/dev/prefix_candidate_decisions.json --json-output evaluation/reports/prefix-dev.json
 ```
 
 ## 11. 最终验收

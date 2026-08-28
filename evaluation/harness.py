@@ -10,6 +10,7 @@ from typing import Any, Protocol
 from pydantic import BaseModel, Field
 
 from evaluation.reporting import summarize_results, write_json_report
+from evaluation.manifest import build_run_manifest
 from evaluation.schema import EvaluationTask, load_tasks
 from evaluation.verifiers import verify_task_outcome
 
@@ -330,7 +331,14 @@ def _main(argv: list[str]) -> int:
     print(_summarize(results))
     print(f"total_elapsed_ms={((time.perf_counter() - started) * 1000):.1f}")
     if output_path is not None:
-        write_json_report(output_path, results)
+        manifest = build_run_manifest(
+            fixtures_path,
+            trials=trials,
+            runner="deterministic_conversation" if kind == "task" else "deterministic_case",
+            environment="in_memory",
+            repository_root=Path(__file__).resolve().parents[1],
+        )
+        write_json_report(output_path, results, manifest=manifest)
         print(f"json_report={output_path}")
     return 0 if all(result.passed for result in results) else 1
 
