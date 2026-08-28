@@ -9,6 +9,10 @@ from typing import Any, Protocol
 
 from pydantic import BaseModel, Field
 
+from evaluation.reporting import summarize_results, write_json_report
+from evaluation.schema import EvaluationTask, load_tasks
+from evaluation.verifiers import verify_task_outcome
+
 
 class EvaluationCase(BaseModel):
     """A deterministic, machine-checkable contract for one customer-service turn.
@@ -33,13 +37,19 @@ class EvaluationCase(BaseModel):
     max_node_tokens: int | None = None
     # Per-run-name LLM oracle for deterministic replay of manager and child agents.
     llm_script: dict[str, tuple[dict[str, Any] | str, ...]] = Field(default_factory=dict)
+    # A case-local replacement for selected in-memory fixture tables.
+    initial_state_data: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
 
 
 class RunOutcome(BaseModel):
     """What a runner produces after executing one case (trajectory + state + latency)."""
 
+    run_id: str | None = None
     trajectory: list[dict[str, Any]] = Field(default_factory=list)
     final_state: dict[str, Any] = Field(default_factory=dict)
+    environment_before: dict[str, Any] = Field(default_factory=dict)
+    environment_after: dict[str, Any] = Field(default_factory=dict)
+    turns: list[dict[str, Any]] = Field(default_factory=list)
     llm_calls: int = 0
     llm_call_runs: list[str] = Field(default_factory=list)
     elapsed_ms: float = 0.0
@@ -52,7 +62,14 @@ class EvaluationResult(BaseModel):
     assertions: dict[str, bool]
     trajectory: list[dict[str, Any]] = Field(default_factory=list)
     final_state: dict[str, Any] = Field(default_factory=dict)
+    environment_before: dict[str, Any] = Field(default_factory=dict)
+    environment_after: dict[str, Any] = Field(default_factory=dict)
+    turns: list[dict[str, Any]] = Field(default_factory=list)
     judge_score: float | None = None
+    reward: float = 1.0
+    component_scores: dict[str, float] = Field(default_factory=dict)
+    vetoes_triggered: tuple[str, ...] = ()
+    run_id: str | None = None
     llm_calls: int = 0
     elapsed_ms: float = 0.0
 
@@ -67,6 +84,7 @@ class Judge(Protocol):
 
 
 Runner = Callable[[EvaluationCase], RunOutcome]
+TaskRunner = Callable[[EvaluationTask], RunOutcome]
 
 
 class EvaluationHarness:
@@ -76,9 +94,16 @@ class EvaluationHarness:
     Model-judge scoring supplements but never replaces deterministic assertions.
     """
 
-    def __init__(self, runner: Runner, judge: Judge | None = None):
+    def __init__(
+        self,
+        runner: Runner,
+        judge: Judge | None = None,
+        *,
+        task_runner: TaskRunner | None = None,
+    ):
         self.runner = runner
         self.judge = judge
+        self.task_runner = task_runner
 
     def run(self, case: EvaluationCase) -> EvaluationResult:
         outcome = self.runner(case)
@@ -114,7 +139,34 @@ class EvaluationHarness:
             assertions=assertions,
             trajectory=trajectory,
             final_state=final_state,
+            environment_before=outcome.environment_before,
+            environment_after=outcome.environment_after,
+            turns=outcome.turns,
             judge_score=score,
+            run_id=outcome.run_id,
+            llm_calls=outcome.llm_calls,
+            elapsed_ms=outcome.elapsed_ms,
+        )
+
+    def run_task(self, task: EvaluationTask) -> EvaluationResult:
+        case = task_to_case(task)
+        outcome = self.task_runner(task) if self.task_runner is not None else self.runner(case)
+        score = self.judge.score(case, outcome.trajectory, outcome.final_state) if self.judge else None
+        report = verify_task_outcome(task, outcome, judge_score=score)
+        return EvaluationResult(
+            case_id=task.id,
+            passed=report.passed,
+            assertions=report.assertions,
+            trajectory=outcome.trajectory,
+            final_state=outcome.final_state,
+            environment_before=outcome.environment_before,
+            environment_after=outcome.environment_after,
+            turns=outcome.turns,
+            judge_score=score,
+            reward=report.reward,
+            component_scores=report.component_scores,
+            vetoes_triggered=report.vetoes_triggered,
+            run_id=outcome.run_id,
             llm_calls=outcome.llm_calls,
             elapsed_ms=outcome.elapsed_ms,
         )
@@ -129,11 +181,57 @@ def run_cases(
     return [harness.run(case) for case in cases]
 
 
+def run_tasks(
+    tasks: list[EvaluationTask],
+    runner: Runner,
+    judge: Judge | None = None,
+    *,
+    task_runner: TaskRunner | None = None,
+) -> list[EvaluationResult]:
+    harness = EvaluationHarness(runner, judge, task_runner=task_runner)
+    return [harness.run_task(task) for task in tasks]
+
+
+def task_to_case(task: EvaluationTask) -> EvaluationCase:
+    budgets = task.evaluation_criteria.budgets
+    return EvaluationCase(
+        case_id=task.id,
+        user_id=task.user_id,
+        message=task.ticket,
+        expected_route=task.expected_route,
+        expected_agents=task.expected_agents,
+        expected_capabilities=task.expected_capabilities or (),
+        forbidden_tools=task.evaluation_criteria.forbidden.tools,
+        requires_grounding=False,
+        max_llm_calls=budgets.max_llm_calls,
+        llm_script=task.llm_script,
+        initial_state_data=task.initial_state.data,
+    )
+
+
 def _load_cases(path: Path) -> list[EvaluationCase]:
     data = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(data, list):
         raise ValueError(f"fixtures must be a JSON list: {path}")
     return [EvaluationCase.model_validate(item) for item in data]
+
+
+def _load_inputs(path: Path) -> tuple[str, list[EvaluationCase] | list[EvaluationTask]]:
+    raw = path.read_text(encoding="utf-8")
+    if path.suffix.lower() in {".yaml", ".yml"}:
+        import yaml
+
+        data = yaml.safe_load(raw)
+    else:
+        data = json.loads(raw)
+    items = data.get("tasks") if isinstance(data, dict) and "tasks" in data else data
+    if not isinstance(items, list):
+        raise ValueError(f"evaluation input must contain a list: {path}")
+    if items and all(item.get("schema_version") == "smart-cs-eval/v1" for item in items):
+        return "task", load_tasks(path)
+    if any(isinstance(item, dict) and item.get("schema_version") for item in items):
+        raise ValueError("evaluation files cannot mix schema versions")
+    return "case", [EvaluationCase.model_validate(item) for item in items]
 
 
 def _summarize(results: list[EvaluationResult]) -> str:
@@ -163,23 +261,77 @@ def _summarize(results: list[EvaluationResult]) -> str:
             "elapsed_ms min/median/max = "
             f"{lat_sorted[0]:.1f} / {lat_sorted[len(lat_sorted) // 2]:.1f} / {lat_sorted[-1]:.1f}"
         )
+    structured = summarize_results(results)
+    if structured["component_pass_rates"]:
+        components = ", ".join(
+            f"{name}={value:.3f}"
+            for name, value in structured["component_pass_rates"].items()
+        )
+        lines.append(f"components  {components}")
+    if structured["veto_counts"]:
+        lines.append(f"vetoes      {structured['veto_counts']}")
+    reliability = structured["reliability"]
+    if reliability["pass_at_k"] is not None:
+        lines.append(
+            f"reliability k={reliability['k']} "
+            f"Pass@k={reliability['pass_at_k']:.3f} "
+            f"Pass^k={reliability['pass_power_k']:.3f}"
+        )
     return "\n".join(lines)
 
 
 def _main(argv: list[str]) -> int:
     if len(argv) < 2:
-        print("usage: python -m evaluation.harness <fixtures.json>", file=sys.stderr)
+        print(
+            "usage: python -m evaluation.harness <cases.json|yaml> "
+            "[--trials K] [--json-output report.json]",
+            file=sys.stderr,
+        )
         return 2
     fixtures_path = Path(argv[1])
-    cases = _load_cases(fixtures_path)
+    kind, inputs = _load_inputs(fixtures_path)
+    output_path: Path | None = None
+    if "--json-output" in argv:
+        index = argv.index("--json-output")
+        if index + 1 >= len(argv):
+            print("--json-output requires a path", file=sys.stderr)
+            return 2
+        output_path = Path(argv[index + 1])
+    trials = 1
+    if "--trials" in argv:
+        index = argv.index("--trials")
+        if index + 1 >= len(argv):
+            print("--trials requires a positive integer", file=sys.stderr)
+            return 2
+        try:
+            trials = int(argv[index + 1])
+        except ValueError:
+            trials = 0
+        if trials < 1:
+            print("--trials requires a positive integer", file=sys.stderr)
+            return 2
 
     # Import the deterministic in-memory runner lazily so harness.py stays lightweight.
-    from evaluation.deterministic_runner import run_case
+    from evaluation.deterministic_runner import run_case, run_task_conversation
 
     started = time.perf_counter()
-    results = run_cases(cases, run_case)
+    if kind == "task":
+        results = []
+        for _ in range(trials):
+            results.extend(run_tasks(  # type: ignore[arg-type]
+                inputs,
+                run_case,
+                task_runner=run_task_conversation,
+            ))
+    else:
+        results = []
+        for _ in range(trials):
+            results.extend(run_cases(inputs, run_case))  # type: ignore[arg-type]
     print(_summarize(results))
     print(f"total_elapsed_ms={((time.perf_counter() - started) * 1000):.1f}")
+    if output_path is not None:
+        write_json_report(output_path, results)
+        print(f"json_report={output_path}")
     return 0 if all(result.passed for result in results) else 1
 
 

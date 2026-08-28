@@ -136,4 +136,16 @@ python scripts/seed_demo_business_data.py --retail-history-only --apply  # 仅�
 
 治理审计、退款、退换货和变更历史不会被伪造，只由实际应用动作生成。
 
-`evaluation/fixtures/smoke_cases.json` 提供首批路由、工具序列、确认与越权用例。`EvaluationHarness` 支持确定性断言，可选 Judge 只评价回复质量，不能替代权限、状态或终态断言。
+`evaluation/fixtures/smoke_cases.json` 保留旧版工作流契约 smoke；版本化的
+`smart-cs-eval/v1` gold tasks 位于 `evaluation/datasets/dev/gold_cases.json`，会在
+每个 case 前重置业务环境，并独立核验业务状态、副作用、治理过程、必要沟通和安全否决项。
+可选 Judge 只评价回复质量，不能替代权限、状态或终态断言。
+
+```powershell
+python -m evaluation.harness evaluation/fixtures/smoke_cases.json
+python -m evaluation.harness evaluation/datasets/dev/gold_cases.json
+python -m evaluation.harness evaluation/datasets/dev/gold_cases.json --trials 3 --json-output evaluation/reports/dev.json
+```
+
+重复 trial 的报告同时给出 `Pass@k`（至少一次通过）与 `Pass^k`（每次都通过）。
+完整的目标架构、数据集规模和发布门禁见 `evaluation/EVALUATION_PLAN.md`。

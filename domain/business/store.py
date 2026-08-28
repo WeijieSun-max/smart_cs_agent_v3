@@ -111,6 +111,24 @@ class InMemoryBusinessStore:
         item=self._receipts.get(idempotency_key)
         return copy.deepcopy(item) if item else None
 
+    def evaluation_snapshot(self) -> dict[str, Any]:
+        """Return an isolated, semantic state projection for deterministic evals.
+
+        Runtime code never uses this method for authorization.  Evaluation code uses
+        it to verify business state independently from the LangGraph completion state.
+        """
+        with self._lock:
+            snapshot = {
+                table: {
+                    str(row.get(_id_field(table), index)): copy.deepcopy(row)
+                    for index, row in enumerate(rows)
+                }
+                for table, rows in self._data.items()
+            }
+            snapshot["governed_actions"] = copy.deepcopy(self._pending)
+            snapshot["receipts"] = copy.deepcopy(self._receipts)
+            return snapshot
+
     def _resource_for_action(self, args: dict[str, Any], user_id: str) -> tuple[str, dict[str, Any]]:
         for resource, key in (("lines", "line_id"), ("orders", "order_id"), ("addresses", "address_id")):
             if key in args:

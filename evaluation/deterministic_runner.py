@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import json
 import time
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from langchain_core.messages import AIMessage
 from langgraph.checkpoint.memory import MemorySaver
@@ -12,6 +14,7 @@ from domain.action_governance import GovernedActionService, initialize_action_se
 from domain.business.service import initialize_service as initialize_business_service
 from domain.business.store import InMemoryBusinessStore
 from domain.customer_service_agent.file_skills import initialize_catalog
+from domain.customer_service_agent.retrieval.answer_cache import rag_answer_cache
 from domain.customer_service_agent.service.knowledge_service import (
     initialize_service as initialize_knowledge_service,
 )
@@ -24,6 +27,7 @@ from domain.shared.checkpoint.checkpoint_saver_service import (
 from domain.shared.identity import RequestIdentityContext
 from domain.shared.llm.llm_service import initialize_llm_client
 from evaluation.harness import EvaluationCase, RunOutcome
+from evaluation.schema import EvaluationTask
 from infra.knowledge.local_knowledge_store import LocalKnowledgeStore
 
 _BACKEND_ROOT = Path(__file__).resolve().parents[1]
@@ -84,8 +88,27 @@ class RecordingActionService(GovernedActionService):
         *,
         skill=None,
     ) -> Any:
-        self._trajectory.append({"tool_name": tool_name, "effect": "read"})
-        return await super().execute_read(tool_name, arguments, identity, skill=skill)
+        try:
+            result = await super().execute_read(tool_name, arguments, identity, skill=skill)
+        except Exception as exc:
+            self._trajectory.append({
+                "phase": "tool_result",
+                "tool_name": tool_name,
+                "effect": "read",
+                "arguments": deepcopy(arguments),
+                "success": False,
+                "error_type": type(exc).__name__,
+            })
+            raise
+        self._trajectory.append({
+            "phase": "tool_result",
+            "tool_name": tool_name,
+            "effect": "read",
+            "arguments": deepcopy(arguments),
+            "success": True,
+            "result": deepcopy(result),
+        })
+        return result
 
     def propose_write(
         self,
@@ -96,14 +119,62 @@ class RecordingActionService(GovernedActionService):
         impact_summary: str,
         skill=None,
     ) -> Any:
-        self._trajectory.append({"tool_name": tool_name, "effect": "write"})
-        return super().propose_write(
+        envelope = super().propose_write(
             tool_name,
             arguments,
             identity,
             impact_summary=impact_summary,
             skill=skill,
         )
+        self._trajectory.append({
+            "phase": "proposal",
+            "tool_name": tool_name,
+            "effect": "write",
+            "arguments": deepcopy(envelope.arguments),
+            "action_id": envelope.action_id,
+            "status": envelope.status,
+            "actor": "agent",
+        })
+        return envelope
+
+    async def confirm(self, identity: RequestIdentityContext) -> Any:
+        active = self.get_active(identity)
+        if active is not None:
+            self._trajectory.append({
+                "phase": "confirmation",
+                "tool_name": active.tool_name,
+                "effect": "write",
+                "arguments": deepcopy(active.arguments),
+                "action_id": active.action_id,
+                "actor": "user",
+                "turn_id": identity.turn_id,
+            })
+        result = await super().confirm(identity)
+        self._trajectory.append({
+            "phase": "execution",
+            "tool_name": result.tool_name,
+            "effect": "write",
+            "arguments": deepcopy(result.arguments),
+            "action_id": result.action_id,
+            "status": result.status,
+            "receipt": deepcopy(result.receipt),
+        })
+        return result
+
+    def reject(self, identity: RequestIdentityContext) -> Any:
+        active = self.get_active(identity)
+        result = super().reject(identity)
+        self._trajectory.append({
+            "phase": "rejection",
+            "tool_name": active.tool_name if active is not None else result.tool_name,
+            "effect": "write",
+            "arguments": deepcopy(result.arguments),
+            "action_id": result.action_id,
+            "status": result.status,
+            "actor": "user",
+            "turn_id": identity.turn_id,
+        })
+        return result
 
 
 def default_fixtures() -> dict[str, list[dict[str, Any]]]:
@@ -208,13 +279,14 @@ _booted = False
 _llm: ScriptedChatModel | None = None
 _graph = None
 _actions: RecordingActionService | None = None
+_store: InMemoryBusinessStore | None = None
 _trajectory: list[dict[str, Any]] = []
 
 
 def bootstrap(*, fixtures: dict[str, list[dict[str, Any]]] | None = None) -> None:
     """一次性把整套确定性平台装好：LLM double、内存 checkpoint、业务数据、
     治理服务、Skill 目录、知识库、LangGraph 工作流。"""
-    global _booted, _llm, _graph, _actions
+    global _booted, _llm, _graph
     if _booted:
         return
     _llm = ScriptedChatModel(
@@ -228,15 +300,7 @@ def bootstrap(*, fixtures: dict[str, list[dict[str, Any]]] | None = None) -> Non
     initialize_llm_client(_llm)  # type: ignore[arg-type]
     initialize_checkpoint(MemorySaver())
 
-    business = initialize_business_service(InMemoryBusinessStore(fixtures or default_fixtures()))
-    _actions = RecordingActionService(
-        get_mcp_server(),
-        business,
-        trajectory=_trajectory,
-        ttl_seconds=900,
-        tool_timeout_seconds=5,
-    )
-    initialize_action_service(_actions)
+    _reset_case_environment(fixtures or default_fixtures())
 
     initialize_catalog(_BACKEND_ROOT / "skills", get_mcp_server())
     initialize_knowledge_service(_build_knowledge_store())
@@ -247,21 +311,33 @@ def bootstrap(*, fixtures: dict[str, list[dict[str, Any]]] | None = None) -> Non
 
 def run_case(case: EvaluationCase) -> RunOutcome:
     bootstrap()
-    assert _llm is not None and _actions is not None and _graph is not None
+    assert _llm is not None and _graph is not None
+    fixtures = default_fixtures()
+    for table, rows in case.initial_state_data.items():
+        fixtures[table] = deepcopy(rows)
+    _reset_case_environment(fixtures)
+    assert _actions is not None and _store is not None
     _llm.reset(case.llm_script)
-    _trajectory.clear()
+    environment_before = _store.evaluation_snapshot()
 
-    state = create_chat_state(case.user_id, case.case_id, case.message)
-    config = {"configurable": {"thread_id": f"{case.user_id}:{case.case_id}"}}
+    run_id = uuid4().hex
+    session_id = f"eval-{case.case_id}-{run_id[:8]}"
+    state = create_chat_state(case.user_id, session_id, case.message, turn_id=f"eval-{run_id[:12]}")
+    config = {"configurable": {"thread_id": f"{case.user_id}:{session_id}"}}
 
     started = time.perf_counter()
     final = _graph.invoke(state, config=config)
     elapsed_ms = (time.perf_counter() - started) * 1000
+    _trajectory.append({
+        "phase": "assistant_message",
+        "turn_index": 0,
+        "content": str(final.get("final_response") or ""),
+    })
 
     identity = RequestIdentityContext(
         user_id=case.user_id,
-        session_id=case.case_id,
-        turn_id="eval",
+        session_id=session_id,
+        turn_id=f"eval-{run_id[:12]}",
     )
     try:
         active = _actions.get_active(identity)
@@ -271,9 +347,110 @@ def run_case(case: EvaluationCase) -> RunOutcome:
 
     final_state = {**final, "pending_action": pending_action}
     return RunOutcome(
+        run_id=run_id,
         trajectory=list(_trajectory),
         final_state=final_state,
+        environment_before=environment_before,
+        environment_after=_store.evaluation_snapshot(),
+        turns=[{
+            "turn_index": 0,
+            "user_message": case.message,
+            "assistant_message": str(final.get("final_response") or ""),
+            "intent": final.get("intent"),
+        }],
         llm_calls=len(_llm.calls),
         llm_call_runs=list(_llm.calls),
         elapsed_ms=elapsed_ms,
     )
+
+
+def run_task_conversation(task: EvaluationTask) -> RunOutcome:
+    """Run a versioned task across scripted user turns in one isolated session."""
+
+    bootstrap()
+    assert _llm is not None and _graph is not None
+    fixtures = default_fixtures()
+    for table, rows in task.initial_state.data.items():
+        fixtures[table] = deepcopy(rows)
+    _reset_case_environment(fixtures)
+    assert _actions is not None and _store is not None
+
+    run_id = uuid4().hex
+    session_id = f"eval-{task.id}-{run_id[:8]}"
+    thread_id = f"{task.user_id}:{session_id}"
+    environment_before = _store.evaluation_snapshot()
+    scripts = [(task.ticket, task.llm_script), *(
+        (turn.message, turn.llm_script)
+        for turn in task.user_scenario.scripted_turns
+    )]
+    all_llm_calls: list[str] = []
+    turn_results: list[dict[str, Any]] = []
+    final: dict[str, Any] = {}
+    started = time.perf_counter()
+
+    for turn_index, (message, script) in enumerate(scripts):
+        _llm.reset(script)
+        turn_id = f"eval-{run_id[:10]}-{turn_index}"
+        state = create_chat_state(
+            task.user_id,
+            session_id,
+            message,
+            turn_id=turn_id,
+        )
+        final = _graph.invoke(state, config={"configurable": {"thread_id": thread_id}})
+        all_llm_calls.extend(_llm.calls)
+        assistant_message = str(final.get("final_response") or "")
+        _trajectory.append({
+            "phase": "assistant_message",
+            "turn_index": turn_index,
+            "content": assistant_message,
+        })
+        turn_results.append({
+            "turn_index": turn_index,
+            "turn_id": turn_id,
+            "user_message": message,
+            "assistant_message": assistant_message,
+            "intent": final.get("intent"),
+        })
+
+    elapsed_ms = (time.perf_counter() - started) * 1000
+    identity = RequestIdentityContext(
+        user_id=task.user_id,
+        session_id=session_id,
+        turn_id=f"eval-{run_id[:10]}-{len(scripts) - 1}",
+    )
+    try:
+        active = _actions.get_active(identity)
+        pending_action = active.action_id if active is not None else None
+    except Exception:
+        pending_action = None
+
+    return RunOutcome(
+        run_id=run_id,
+        trajectory=list(_trajectory),
+        final_state={**final, "pending_action": pending_action},
+        environment_before=environment_before,
+        environment_after=_store.evaluation_snapshot(),
+        turns=turn_results,
+        llm_calls=len(all_llm_calls),
+        llm_call_runs=all_llm_calls,
+        elapsed_ms=elapsed_ms,
+    )
+
+
+def _reset_case_environment(fixtures: dict[str, list[dict[str, Any]]]) -> None:
+    """Install fresh business and governed-action state for exactly one case."""
+
+    global _actions, _store
+    _trajectory.clear()
+    rag_answer_cache.clear()
+    _store = InMemoryBusinessStore(deepcopy(fixtures))
+    business = initialize_business_service(_store)
+    _actions = RecordingActionService(
+        get_mcp_server(),
+        business,
+        trajectory=_trajectory,
+        ttl_seconds=900,
+        tool_timeout_seconds=5,
+    )
+    initialize_action_service(_actions)
