@@ -1,3 +1,5 @@
-from domain.customer_service_agent.policy.pii import detect_pii, mask_pii, reject_pii
+"""领域输入与长期记忆使用的敏感信息策略。"""
 
-__all__ = ["detect_pii", "mask_pii", "reject_pii"]
+from domain.customer_service_agent.policy.pii import detect_pii, reject_pii
+
+__all__ = ["detect_pii", "reject_pii"]

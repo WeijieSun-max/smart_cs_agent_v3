@@ -1,3 +1,5 @@
+"""面向客服工具的业务查询、所有权校验与确定性计算。"""
+
 from __future__ import annotations
 
 import math
@@ -12,31 +14,48 @@ from .store import BusinessStore
 
 
 class UserNotActiveError(ServiceError):
+    """请求用户不存在或已停用，禁止继续读取或修改其业务数据。"""
+
     code = "identity.user_not_active"
     status_code = 403
     safe_message = "当前用户不存在或不可用，不提供该业务服务。"
 
 
 class ResourceNotFoundError(ServiceError):
+    """资源不存在或不属于当前用户；统一响应以避免泄露资源是否存在。"""
+
     code = "business.resource_not_found"
     status_code = 404
     safe_message = "未找到属于当前用户的业务资源。"
 
 
 class BusinessService:
+    """在存储端口之上实施用户所有权和电信/零售业务规则。
+
+    所有私有资源查询都先验证有效用户，并把 `user_id` 传入存储查询。服务
+    仅返回属于调用者的数据；写操作仍须经过 `GovernedActionService` 的确认
+    流程，本类不向 Agent 暴露绕过治理的直接入口。
+    """
+
     def __init__(self, store: BusinessStore):
         self.store = store
 
     def require_available(self) -> None:
+        """要求权威业务存储可用；不可用时拒绝用缓存数据冒充事实。"""
+
         if not self.store.available:
             raise StorageUnavailableError()
 
     def require_active_user(self, user_id: str) -> None:
+        """验证用户存在且启用，作为所有私有业务能力的前置条件。"""
+
         self.require_available()
         if not self.store.user_is_active(user_id):
             raise UserNotActiveError()
 
     def resolve_line(self, user_id: str, line_id: str | None = None) -> dict[str, Any]:
+        """解析用户线路；省略 ID 时只允许恰好存在一条活跃线路。"""
+
         self.require_active_user(user_id)
         if line_id:
             line = self.store.get_owned("lines", line_id, user_id)
@@ -49,6 +68,8 @@ class BusinessService:
         return lines[0]
 
     def current_plan(self, user_id: str, line_id: str | None = None) -> dict[str, Any]:
+        """返回线路当前套餐及线路版本，版本供后续写操作做乐观锁。"""
+
         line = self.resolve_line(user_id, line_id)
         plans = self.store.list_public("plans", status="active")
         plan = next((item for item in plans if item.get("plan_id") == line.get("current_plan_id")), None)
@@ -57,6 +78,8 @@ class BusinessService:
         return {"line_id": line["line_id"], "line_version": line["version"], **plan}
 
     def usage_profile(self, user_id: str, line_id: str | None = None) -> UsageProfile:
+        """用最近三个完整账期和当前账期构造可解释的用量画像。"""
+
         line = self.resolve_line(user_id, line_id)
         cycles = sorted(
             self.store.list_owned("usage_cycles", user_id, line_id=line["line_id"]),
@@ -73,8 +96,25 @@ class BusinessService:
         quality = "insufficient" if usable == 0 else "low_confidence" if usable == 1 else "normal_confidence"
         peak_data = max([*data_values, projected_data], default=0)
         peak_voice = max([*voice_values, projected_voice], default=0)
+        current_included_data = int((current or {}).get("included_data_mb", 0))
+        current_used_data = int((current or {}).get("used_data_mb", 0))
+        current_refueled_data = int((current or {}).get("refueled_data_mb", 0))
+        current_included_voice = int((current or {}).get("included_voice_minutes", 0))
+        current_used_voice = int((current or {}).get("used_voice_minutes", 0))
         return UsageProfile(
             line_id=line["line_id"],
+            current_cycle_start=_optional_text((current or {}).get("cycle_start")),
+            current_cycle_end=_optional_text((current or {}).get("cycle_end")),
+            current_included_data_mb=current_included_data,
+            current_used_data_mb=current_used_data,
+            current_refueled_data_mb=current_refueled_data,
+            current_remaining_data_mb=max(
+                0,
+                current_included_data + current_refueled_data - current_used_data,
+            ),
+            current_included_voice_minutes=current_included_voice,
+            current_used_voice_minutes=current_used_voice,
+            current_remaining_voice_minutes=max(0, current_included_voice - current_used_voice),
             usable_cycles=usable,
             analysis_period=f"最近{usable}个完整账期" + ("及当前账期预测" if current else ""),
             data_quality=quality,
@@ -90,10 +130,14 @@ class BusinessService:
         )
 
     def list_plans(self, user_id: str, line_id: str | None = None) -> list[dict[str, Any]]:
+        """验证线路所有权后列出当前有效的公共套餐。"""
+
         self.resolve_line(user_id, line_id)
         return self.store.list_public("plans", status="active")
 
     def compare_plans(self, user_id: str, line_id: str | None, candidate_plan_ids: list[str]) -> list[dict[str, Any]]:
+        """按预测月成本、容量余量和支配关系比较候选套餐。"""
+
         profile = self.usage_profile(user_id, line_id)
         plans = [item for item in self.list_plans(user_id, line_id) if item.get("plan_id") in set(candidate_plan_ids)]
         comparisons: list[PlanComparison] = []
@@ -126,6 +170,8 @@ class BusinessService:
         return [item.model_dump(mode="json") for item in sorted(comparisons, key=lambda item: (item.dominated, item.expected_monthly_cost))]
 
     def get_order(self, user_id: str, order_id: str) -> dict[str, Any]:
+        """按所有权读取订单主记录。"""
+
         self.require_active_user(user_id)
         order = self.store.get_owned("orders", order_id, user_id)
         if order is None:
@@ -133,6 +179,8 @@ class BusinessService:
         return order
 
     def get_order_detail(self, user_id: str, order_id: str) -> dict[str, Any]:
+        """读取订单及商品快照明细，用于售后消歧与数量校验。"""
+
         self.require_active_user(user_id)
         order = next(
             (item for item in self.store.list_order_candidates(user_id) if item.get("order_id") == order_id),
@@ -143,6 +191,8 @@ class BusinessService:
         return order
 
     def list_orders(self, user_id: str, status: str | None = None) -> list[dict[str, Any]]:
+        """列出当前用户订单，可按状态精确过滤。"""
+
         self.require_active_user(user_id)
         return self.store.list_owned("orders", user_id, status=status)
 
@@ -155,6 +205,8 @@ class BusinessService:
         product_query: str = "",
         status: str | None = None,
     ) -> list[dict[str, Any]]:
+        """按半开日期区间、商品文本和状态筛选最多 50 个订单候选。"""
+
         self.require_active_user(user_id)
         normalized_product = product_query.strip().lower()
         result = []
@@ -175,6 +227,8 @@ class BusinessService:
         return result[:50]
 
     def list_products(self, query: str = "") -> list[dict[str, Any]]:
+        """查询公共在售商品；文本匹配仅用于缩小候选，不参与授权。"""
+
         products = self.store.list_public("products", status="active")
         if not query.strip():
             return products
@@ -182,6 +236,8 @@ class BusinessService:
         return [item for item in products if normalized in f"{item.get('name', '')} {item.get('description', '')}".lower()]
 
     def list_addresses(self,user_id: str) -> list[dict[str,Any]]:
+        """返回用户有效地址，并在领域边界内解密受保护字段。"""
+
         self.require_active_user(user_id)
         return [
             _address_for_customer(item)
@@ -189,19 +245,34 @@ class BusinessService:
         ]
 
     def list_payment_methods(self,user_id: str) -> list[dict[str,Any]]:
+        """返回用户有效的脱敏支付方式。"""
+
         self.require_active_user(user_id)
         return self.store.list_owned("payment_methods",user_id,status="active")
 
     def execute_action(self, tool_name: str, arguments: dict[str, Any], user_id: str, action_id: str, idempotency_key: str) -> dict[str, Any]:
+        """在再次验证用户后把已治理写操作交给权威存储执行。"""
+
         self.require_active_user(user_id)
         return self.store.execute_action(tool_name, arguments, user_id, action_id, idempotency_key)
 
 
 def _average(values: list[int]) -> int:
+    """计算四舍五入后的整数平均值；空样本返回零。"""
+
     return round(sum(values) / len(values)) if values else 0
 
 
+def _optional_text(value: Any) -> str | None:
+    """把可选日期/标量转换为非空文本，供 JSON 领域模型稳定输出。"""
+
+    text = str(value).strip() if value is not None else ""
+    return text or None
+
+
 def _project(current: dict[str, Any] | None, field: str) -> int:
+    """按已过天数外推当前账期；不足七天时避免放大早期噪声。"""
+
     if not current:
         return 0
     elapsed = max(1, int(current.get("elapsed_days", 0)))
@@ -235,12 +306,16 @@ _service: BusinessService | None = None
 
 
 def initialize_service(store: BusinessStore) -> BusinessService:
+    """安装使用指定存储端口的进程级业务服务。"""
+
     global _service
     _service = BusinessService(store)
     return _service
 
 
 def get_service() -> BusinessService:
+    """取得已初始化的业务服务。"""
+
     if _service is None:
         raise RuntimeError("business service is not initialized")
     return _service

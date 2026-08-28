@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import inspect
 from collections.abc import Awaitable, Callable
 from copy import deepcopy
@@ -119,19 +118,6 @@ async def run_prefix_task_async(
     if inspect.isawaitable(output):
         output = await output
     return verify_prefix_decision(task, output)
-
-
-def run_prefix_task(
-    task: TrajectoryPrefixTask,
-    runner: PrefixDecisionRunner,
-) -> PrefixEvaluationResult:
-    """Synchronous entrypoint for CLIs and non-async test harnesses."""
-
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        return asyncio.run(run_prefix_task_async(task, runner))
-    raise RuntimeError("run_prefix_task cannot run inside an active event loop; await run_prefix_task_async")
 
 
 async def run_supervisor_prefix_async(

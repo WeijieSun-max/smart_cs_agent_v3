@@ -1,3 +1,5 @@
+"""文件 Skill 的元数据、冻结索引和完整加载结果。"""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -7,6 +9,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class SkillMetadata(BaseModel):
+    """来自 `SKILL.md` frontmatter 的严格授权元数据。"""
+
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     name: str = Field(pattern=r"^[a-z][a-z0-9-]{2,63}$")
@@ -20,6 +24,8 @@ class SkillMetadata(BaseModel):
 
 
 class SkillIndexEntry(BaseModel):
+    """启动扫描得到的轻量条目；哈希用于检测冻结后的文件变化。"""
+
     model_config = ConfigDict(arbitrary_types_allowed=True, frozen=True)
 
     metadata: SkillMetadata
@@ -28,6 +34,8 @@ class SkillIndexEntry(BaseModel):
 
 
 class LoadedSkill(BaseModel):
+    """通过权限与完整性校验后可交给领域 Agent 使用的 Skill。"""
+
     model_config = ConfigDict(arbitrary_types_allowed=True, frozen=True)
 
     metadata: SkillMetadata
@@ -37,6 +45,8 @@ class LoadedSkill(BaseModel):
     content_hash: str
 
     def identity(self) -> dict[str, str]:
+        """返回写入治理动作和审计轨迹的稳定 Skill 身份。"""
+
         return {
             "skill_name": self.metadata.name,
             "skill_version": self.metadata.version,

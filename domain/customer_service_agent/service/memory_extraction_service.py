@@ -1,3 +1,5 @@
+"""从已完成会话轮次抽取候选长期记忆并应用确定性策略。"""
+
 from __future__ import annotations
 
 import json
@@ -25,17 +27,27 @@ EXTRACTION_SYSTEM_PROMPT = """你是客服长期记忆提炼器。只提取具�
 
 
 class ExtractionDecision(BaseModel):
+    """模型可返回的有界候选记忆列表。"""
+
     model_config = ConfigDict(extra="forbid")
 
     memories: list[MemoryCandidate] = Field(max_length=50)
 
 
 class MemoryExtractionService:
+    """组合 LLM 候选生成与不可绕过的 MemoryPolicy。
+
+    模型只负责提出候选；PII、凭证、动态业务状态、提示注入、置信度和 TTL
+    均由代码判定。调用者只能得到已经接受并规范化 memory_key 的候选。
+    """
+
     def __init__(self, policy: MemoryPolicy) -> None:
         self.policy = policy
 
     @classmethod
     def default(cls) -> "MemoryExtractionService":
+        """用运行配置构建默认策略阈值和保留期。"""
+
         settings = get_settings()
         return cls(MemoryPolicy(MemoryPolicyConfig(
             episode_min_confidence=settings.memory_episode_min_confidence,
@@ -55,6 +67,8 @@ class MemoryExtractionService:
         messages: list[dict[str, Any]],
         now: datetime,
     ) -> list[MemoryCandidate]:
+        """解析严格模型输出、逐项应用策略并记录接受/拒绝指标。"""
+
         response = invoke_llm(
             [
                 SystemMessage(content=EXTRACTION_SYSTEM_PROMPT),
@@ -84,6 +98,8 @@ class MemoryExtractionService:
         return accepted
 
     def expires_at(self, candidate: MemoryCandidate, now: datetime) -> datetime:
+        """返回已接受候选的策略过期时间；拒绝候选不能取得 TTL。"""
+
         decision = self.policy.evaluate(candidate, now)
         if not decision.accepted or decision.expires_at is None:
             raise ValueError("candidate is not accepted by memory policy")

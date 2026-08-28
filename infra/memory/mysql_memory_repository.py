@@ -142,23 +142,6 @@ class MySQLMemoryRepository(IMemoryRepository):
             raise StorageOperationError()
         return _summary_from_row(row) if row else None
 
-    def save_summary(self, summary: SessionSummary) -> None:
-        ok, _ = self._client().execute_update(
-            """
-            INSERT INTO cs_session_summaries
-                (summary_id, user_id, session_id, version, summary_text, structured_json,
-                 covers_until_message_id, created_at, updated_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-            """,
-            (
-                str(summary.summary_id), summary.user_id, summary.session_id, summary.version,
-                summary.summary_text, _json(summary.structured_data), summary.covers_until_message_id,
-                _db_time(summary.created_at), _db_time(summary.updated_at),
-            ),
-        )
-        if not ok:
-            raise StorageOperationError()
-
     def get_messages_after(
         self,
         user_id: str,
@@ -263,34 +246,6 @@ class MySQLMemoryRepository(IMemoryRepository):
             raise StorageOperationError()
         return _item_from_row(row) if row else None
 
-    def save_item(self, item: MemoryItem, sources: list[MemorySource]) -> None:
-        def operation(cursor) -> None:
-            cursor.execute(
-                """
-                INSERT INTO cs_memory_items
-                    (memory_id, user_id, memory_type, memory_key, content, structured_json, confidence,
-                     status, version, supersedes_id, valid_from, valid_until, expires_at, created_at, updated_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                """,
-                _item_args(item),
-            )
-            for source in sources:
-                cursor.execute(
-                    """
-                    INSERT IGNORE INTO cs_memory_sources
-                        (memory_id, session_id, turn_id, message_id, source_kind, created_at)
-                    VALUES (%s, %s, %s, %s, %s, %s)
-                    """,
-                    (
-                        str(source.memory_id), source.session_id, source.turn_id, source.message_id,
-                        source.source_kind, _db_time(source.created_at),
-                    ),
-                )
-
-        ok, _ = self._client().execute_in_transaction(operation)
-        if not ok:
-            raise StorageOperationError()
-
     def apply_extraction(
         self,
         summary: SessionSummary,
@@ -389,27 +344,6 @@ class MySQLMemoryRepository(IMemoryRepository):
                 _db_time(now), _db_time(now),
             ),
         )
-
-    def transition_item(self, user_id: str, memory_id: str, status: MemoryStatus, reason: str) -> bool:
-        now = _utc_now()
-        statements = [
-            (
-                "UPDATE cs_memory_items SET status = %s, updated_at = %s WHERE memory_id = %s AND user_id = %s",
-                (status.value, _db_time(now), memory_id, user_id),
-            ),
-            (
-                """
-                INSERT INTO cs_memory_audit
-                    (audit_id, memory_id, user_id, action, actor, reason, before_json, after_json, content_hash, created_at)
-                VALUES (%s, %s, %s, %s, 'system', %s, NULL, %s, NULL, %s)
-                """,
-                (str(uuid.uuid4()), memory_id, user_id, "transition", reason, _json({"status": status.value}), _db_time(now)),
-            ),
-        ]
-        ok, affected = self._client().execute_transaction(statements)
-        if not ok:
-            raise StorageOperationError()
-        return bool(affected)
 
     def list_items(
         self,
@@ -677,24 +611,6 @@ class MySQLMemoryRepository(IMemoryRepository):
             (user_id, session_id),
         )
         return deleted
-
-    def enqueue_outbox(self, event: MemoryOutboxEvent) -> bool:
-        ok, affected = self._client().execute_update(
-            """
-            INSERT IGNORE INTO cs_memory_outbox
-                (event_id, event_type, aggregate_id, payload_json, status, attempts, available_at,
-                 lease_until, last_error_code, created_at, processed_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            """,
-            (
-                str(event.event_id), event.event_type.value, event.aggregate_id, _json(event.payload),
-                event.status.value, event.attempts, _db_time(event.available_at), _db_time(event.lease_until),
-                event.last_error_code, _db_time(event.created_at), _db_time(event.processed_at),
-            ),
-        )
-        if not ok:
-            raise StorageOperationError()
-        return bool(affected)
 
     def claim_outbox(
         self,

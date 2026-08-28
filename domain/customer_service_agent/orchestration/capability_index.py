@@ -1,3 +1,5 @@
+"""从工具注册表派生 Supervisor 和领域 Agent 共用的能力索引。"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -17,6 +19,8 @@ INTERNAL_CAPABILITIES = frozenset({"plan_catalog", "order_resolution", "payment_
 
 @dataclass(frozen=True)
 class ToolFacet:
+    """路由所需的最小工具元数据，避免编排层依赖完整处理器定义。"""
+
     name: str
     domain: str
     effect: str
@@ -26,6 +30,8 @@ class ToolFacet:
 
 @dataclass(frozen=True)
 class CapabilityIndex:
+    """按读写效果和 capability 聚合后的不可变工具视图。"""
+
     tools: tuple[ToolFacet, ...]
     capabilities: frozenset[str]  # 注册表全部能力（不含 fallback）
     write_capabilities: frozenset[str]
@@ -54,6 +60,8 @@ class CapabilityIndex:
 
 
 def build_capability_index(server: Any | None = None) -> CapabilityIndex:
+    """读取已注册工具并一次性构建能力、读工具和写工具反向索引。"""
+
     server = server or get_mcp_server()
     tools: list[ToolFacet] = []
     capabilities: set[str] = set()
@@ -99,6 +107,8 @@ _index: CapabilityIndex | None = None
 
 
 def get_capability_index() -> CapabilityIndex:
+    """惰性返回进程级索引；工具注册须在首次调用前完成。"""
+
     global _index
     if _index is None:
         _index = build_capability_index()
@@ -106,7 +116,8 @@ def get_capability_index() -> CapabilityIndex:
 
 
 def validate_capability_contracts() -> list[str]:
-    """Validate registry metadata used to build the Supervisor tool vocabulary."""
+    """返回工具效果、领域、能力和 Agent 归属中的全部契约问题。"""
+
     index = get_capability_index()
     problems: list[str] = []
 

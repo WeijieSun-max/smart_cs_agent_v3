@@ -1,3 +1,5 @@
+"""增量生成无敏感信息的版本化会话摘要。"""
+
 from __future__ import annotations
 
 import json
@@ -22,6 +24,8 @@ SUMMARY_SYSTEM_PROMPT = """你是客服会话摘要器。请基于旧摘要和�
 
 
 class SummaryDecision(BaseModel):
+    """模型摘要输出的严格文本与结构化字段。"""
+
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     summary_text: str = Field(min_length=1, max_length=12_000)
@@ -34,6 +38,8 @@ class SummaryDecision(BaseModel):
 
 
 class SessionSummaryService:
+    """把旧摘要和新增消息压缩为下一版本，并执行 PII 否决。"""
+
     def build(
         self,
         *,
@@ -42,6 +48,12 @@ class SessionSummaryService:
         previous: SessionSummary | None,
         new_messages: list[dict[str, Any]],
     ) -> SessionSummary:
+        """生成覆盖到最大 message_id 的新摘要版本。
+
+        空增量、非法 JSON/Schema 或任何结构字段中的 PII 都会导致失败；旧摘要
+        不会被原地修改，worker 可安全重试同一消息范围。
+        """
+
         if not new_messages:
             raise ValueError("summary requires new messages")
         response = invoke_llm(

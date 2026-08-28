@@ -1,3 +1,5 @@
+"""按用户和会话隔离 LangGraph checkpoint 线程。"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -20,23 +22,33 @@ class ThreadIdentity:
 
     @property
     def thread_id(self) -> str:
+        """生成稳定的 `user_id:session_id` checkpoint 分区键。"""
+
         user = self.user_id or "anonymous"
         return f"{user}:{self.session_id}"
 
 # LangGraph 的 checkpoint 是按线程保存状态的。
 # LangGraph 可以通过同一个 threadid 恢复之前的状态。
 class CheckpointSaverService:
+    """封装 checkpointer，并统一线程键生成与可选清理能力。"""
+
     def __init__(self, checkpointer: BaseCheckpointSaver):
         self._checkpointer = checkpointer
 
     def get_checkpointer(self) -> BaseCheckpointSaver:
+        """返回供工作流编译使用的底层保存器。"""
+
         return self._checkpointer
 
     @staticmethod
     def get_thread_id(user_id: Optional[str], session_id: str) -> str:
+        """生成与 ThreadIdentity 一致的线程 ID。"""
+
         return ThreadIdentity(user_id=user_id, session_id=session_id).thread_id
 
     def clear_thread(self, user_id: Optional[str], session_id: str) -> None:
+        """在保存器支持时删除指定用户会话的 checkpoint。"""
+
         delete_thread = getattr(self._checkpointer, "delete_thread", None)
         if callable(delete_thread):
             delete_thread(self.get_thread_id(user_id, session_id))
@@ -46,5 +58,7 @@ instance: Optional[CheckpointSaverService] = None
 
 
 def initialize_service(checkpointer: BaseCheckpointSaver) -> None:
+    """安装基础设施层提供的进程级 checkpoint 保存器。"""
+
     global instance
     instance = CheckpointSaverService(checkpointer=checkpointer)

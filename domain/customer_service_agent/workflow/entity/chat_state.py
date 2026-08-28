@@ -1,3 +1,5 @@
+"""客服主图的共享状态及单轮初始值构造器。"""
+
 from __future__ import annotations
 
 import uuid
@@ -9,7 +11,7 @@ from langgraph.graph import MessagesState
 
 
 def merge_node_logs(existing: list[str] | None, new: list[str]) -> list[str]:
-    """Append node logs, or clear them when a node emits the reset marker."""
+    """追加节点日志；节点发出唯一 RESET 标记时清空旧日志。"""
     if new == ["RESET"]:
         return []
     return [*(existing or []), *new]
@@ -17,6 +19,13 @@ def merge_node_logs(existing: list[str] | None, new: list[str]) -> list[str]:
 
 # 继承 MessagesState，因此 ChatState 自动包含 messages（对话消息历史）字段。
 class ChatState(MessagesState):
+    """贯穿一次客服轮次的类型化 LangGraph 状态。
+
+    字段分为请求身份、只读会话上下文、Supervisor/Agent 中间结果、治理动作、
+    合规草稿和最终响应。节点应返回最小状态增量，避免并发分支覆盖无关字段。
+    conversation_context 始终是不可信参考，不能作为授权或当前业务事实。
+    """
+
     user_id: str | None  # 当前用户的唯一标识；未登录或匿名访问时可为空。
     session_id: str  # 会话唯一标识，用于关联同一轮多轮对话。
     current_time: str  # 当前请求的日期上下文，供需要时间信息的节点使用。
@@ -61,6 +70,8 @@ def create_chat_state(
     conversation_context: dict[str, Any] | None = None,
     user_message_persisted: bool = False,
 ) -> ChatState:
+    """为新一轮请求创建完整、无共享可变默认值的初始状态。"""
+
     resolved_session_id = session_id or uuid.uuid4().hex
     return {
         "user_id": user_id,

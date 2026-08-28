@@ -29,6 +29,7 @@ def fixtures():
             {"usage_id":"U1","line_id":"L1","cycle_start":"2026-05-01","used_data_mb":22000,"used_voice_minutes":300,"current":False,"refuel_count":1},
             {"usage_id":"U2","line_id":"L1","cycle_start":"2026-06-01","used_data_mb":24000,"used_voice_minutes":330,"current":False,"refuel_count":1},
             {"usage_id":"U3","line_id":"L1","cycle_start":"2026-07-01","used_data_mb":23000,"used_voice_minutes":310,"current":False,"refuel_count":0},
+            {"usage_id":"U4","line_id":"L1","cycle_start":"2026-08-01","cycle_end":"2026-08-31","included_data_mb":30720,"used_data_mb":12288,"refueled_data_mb":1024,"included_voice_minutes":500,"used_voice_minutes":120,"current":True,"elapsed_days":15,"cycle_days":31,"refuel_count":1},
         ],
         "orders":[{"order_id":"O1","order_no":"NO1","user_id":"u1","status":"pending","grand_total":"100","currency":"CNY","version":1}],
         "products":[{"product_id":"PR1","name":"手机壳","description":"透明","status":"active"}],
@@ -61,6 +62,28 @@ def test_plan_comparison_is_deterministic_and_owned():
     comparisons=business.compare_plans("u1","L1",["P1","P2"])
     assert comparisons[0]["plan_id"]=="P2"
     with pytest.raises(Exception): business.usage_profile("u2","L1")
+
+
+def test_usage_profile_resolves_unique_line_from_trusted_user_without_line_id():
+    _, business, _ = setup_platform()
+
+    profile = business.usage_profile("u1")
+
+    assert profile.line_id == "L1"
+    assert profile.current_cycle_start == "2026-08-01"
+    assert profile.current_used_data_mb == 12288
+    assert profile.current_remaining_data_mb == 19456
+    assert profile.current_used_voice_minutes == 120
+    assert profile.current_remaining_voice_minutes == 380
+
+    result = asyncio.run(get_mcp_server().call_tool(
+        "telecom_get_usage_profile",
+        {},
+        trusted_context={"user_id": "u1"},
+    ))
+    assert result.success is True
+    assert result.result["line_id"] == "L1"
+    assert result.result["current_used_data_mb"] == 12288
 
 
 def test_write_requires_frozen_confirmation_and_second_user_lookup():

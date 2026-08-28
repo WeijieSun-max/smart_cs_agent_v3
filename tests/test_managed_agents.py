@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 
 from domain.action_governance import GovernedActionService, initialize_action_service
 from domain.business.service import initialize_service
@@ -195,6 +196,47 @@ def test_knowledge_agent_owns_domain_rag(monkeypatch) -> None:
     assert result.agent == "knowledge_agent"
     assert result.status == "succeeded"
     assert result.facts["rag"]["grounded"] is True
+
+
+def test_tool_agent_receives_only_its_assigned_part_of_a_composite_request(monkeypatch) -> None:
+    _platform()
+    captured_messages = []
+    responses = iter([
+        Response('{"action":"tool_call","tool_name":"telecom_get_usage_profile","arguments":{}}'),
+        Response('{"action":"final","response":"Current-month data usage was retrieved."}'),
+    ])
+
+    def invoke(messages, **_kwargs):
+        captured_messages.append(messages)
+        return next(responses)
+
+    monkeypatch.setattr(tool_agent, "invoke_llm", invoke)
+    objective = "check the current-month data usage for the authenticated user"
+    assignment = AgentAssignment(
+        task_id="T-usage",
+        agent="telecom_agent",
+        objective=objective,
+        capability="usage",
+    )
+
+    result = asyncio.run(tool_agent.run_tool_agent(
+        assignment,
+        create_chat_state(
+            "u1",
+            "s-composite",
+            "check current data usage and whether I bought products this month",
+        ),
+        _identity("s-composite"),
+    ))
+
+    first_payload = json.loads(captured_messages[0][-1].content)
+    assert first_payload["user_query"] == objective
+    assert "bought products" not in first_payload["user_query"]
+    assert "若工具 Schema 未把 line_id" in captured_messages[0][0].content
+    assert result.status == "succeeded"
+    observation = result.facts["observations"][0]
+    assert observation["arguments"] == {}
+    assert observation["result"]["line_id"] == "L1"
 
 
 def test_round_limit_rejects_further_dispatch_and_uses_completed_result(monkeypatch) -> None:

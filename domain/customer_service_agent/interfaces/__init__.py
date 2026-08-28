@@ -1,3 +1,5 @@
+"""领域层依赖的会话、记忆、知识和向量基础设施端口。"""
+
 from __future__ import annotations
 
 from domain.customer_service_agent.interfaces.i_conversation_archive import IConversationArchive

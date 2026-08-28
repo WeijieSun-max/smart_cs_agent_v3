@@ -1,3 +1,5 @@
+"""Supervisor 主循环、依赖感知的领域分派与治理动作执行节点。"""
+
 from __future__ import annotations
 
 import asyncio
@@ -32,6 +34,12 @@ logger = get_logger()
 
 
 async def supervisor_manager_node(state: ChatState) -> dict[str, Any]:
+    """读取活跃治理动作，让 Supervisor 决策并生成下一分支状态。
+
+    只有 dispatch 增加轮次；finish/clarify 直接产生待写作响应。活跃治理动作
+    会作为只读摘要提供给 Supervisor，并由决策校验阻止此时调度新业务。
+    """
+
     identity = identity_from_state(state)
     active_action = await _active_action(identity)
     round_number = int(state.get("supervisor_round") or 0)
@@ -76,10 +84,14 @@ async def supervisor_manager_node(state: ChatState) -> dict[str, Any]:
 
 
 def supervisor_manager_node_sync(state: ChatState) -> dict[str, Any]:
+    """供 LangGraph 同步调用面的 Supervisor 适配器。"""
+
     return asyncio.run(supervisor_manager_node(state))
 
 
 def supervisor_route(state: ChatState) -> str:
+    """把严格 Supervisor action 映射为分派、治理动作或响应分支。"""
+
     decision = SupervisorDecision.model_validate(state.get("supervisor_decision"))
     if decision.action == "dispatch":
         return "dispatch"
@@ -89,6 +101,8 @@ def supervisor_route(state: ChatState) -> str:
 
 
 def dispatch_route(state: ChatState) -> str:
+    """遇到确认/澄清结果时结束调度，否则返回 Supervisor 复核。"""
+
     for value in (state.get("task_results") or {}).values():
         try:
             result = AgentResult.model_validate(value)
@@ -100,6 +114,13 @@ def dispatch_route(state: ChatState) -> str:
 
 
 async def domain_dispatch_node(state: ChatState) -> dict[str, Any]:
+    """按依赖拓扑分批执行领域任务，并隔离各任务失败。
+
+    同一批只运行依赖已完成的任务；失败依赖会使下游显式 skipped。独立任务
+    使用 gather 并行，但每个就绪批最多放行一个写能力。异常只转成对应任务
+    失败，其他成功结果仍可供 Supervisor 复核和最终响应使用。
+    """
+
     assignments = [
         AgentAssignment.model_validate(item)
         for item in (state.get("agent_assignments") or [])
@@ -250,10 +271,14 @@ async def domain_dispatch_node(state: ChatState) -> dict[str, Any]:
 
 
 def domain_dispatch_node_sync(state: ChatState) -> dict[str, Any]:
+    """供 LangGraph 同步调用面的领域分派适配器。"""
+
     return asyncio.run(domain_dispatch_node(state))
 
 
 async def pending_action_execution_node(state: ChatState) -> dict[str, Any]:
+    """应用 Supervisor 的确认/拒绝决定并生成确定性用户结果。"""
+
     decision = SupervisorDecision.model_validate(state.get("supervisor_decision"))
     identity = identity_from_state(state)
     result = await resolve_pending_action(state, identity, decision.action)
@@ -278,6 +303,8 @@ async def pending_action_execution_node(state: ChatState) -> dict[str, Any]:
 
 
 def pending_action_execution_node_sync(state: ChatState) -> dict[str, Any]:
+    """供 LangGraph 同步调用面的治理动作适配器。"""
+
     return asyncio.run(pending_action_execution_node(state))
 
 
@@ -286,6 +313,8 @@ async def _execute_assignment(
     state: ChatState,
     identity: RequestIdentityContext,
 ) -> AgentResult:
+    """选择与 assignment.agent 固定对应的子图并校验其结果。"""
+
     graph = {
         "knowledge_agent": knowledge_agent_graph,
         "telecom_agent": telecom_agent_graph,
@@ -301,6 +330,8 @@ async def _execute_assignment(
 
 
 async def _active_action(identity: RequestIdentityContext) -> dict[str, Any] | None:
+    """读取并投影活跃动作，只暴露意图判断需要的非敏感字段。"""
+
     try:
         actions = get_action_service()
     except RuntimeError:
@@ -318,6 +349,8 @@ async def _active_action(identity: RequestIdentityContext) -> dict[str, Any] | N
 
 
 def _intent_from_assignments(assignments: tuple[AgentAssignment, ...]) -> str:
+    """从 Agent/能力归属汇总本轮电信、零售或复合意图标签。"""
+
     domains = set()
     for item in assignments:
         if item.agent == "telecom_agent" or item.capability == "telecom_troubleshooting":
@@ -330,6 +363,8 @@ def _intent_from_assignments(assignments: tuple[AgentAssignment, ...]) -> str:
 
 
 def _result_failed(value: Any) -> bool:
+    """判断依赖结果是否失败；畸形结果按失败关闭处理。"""
+
     if value is None:
         return False
     try:
@@ -339,10 +374,14 @@ def _result_failed(value: Any) -> bool:
 
 
 def _dumped(result: AgentResult | None) -> dict[str, Any] | None:
+    """把可选任务结果转换为可放入图状态的 JSON 数据。"""
+
     return result.model_dump(mode="json") if result is not None else None
 
 
 def identity_from_state(state: ChatState) -> RequestIdentityContext:
+    """从应用预填的状态恢复可信身份上下文，不读取模型生成字段。"""
+
     return RequestIdentityContext(
         user_id=state.get("user_id") or "anonymous",
         session_id=state["session_id"],

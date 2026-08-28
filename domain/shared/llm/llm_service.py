@@ -1,3 +1,5 @@
+"""管理 LLM profile 路由、全局并发槽和稳定可观测元数据。"""
+
 from __future__ import annotations
 
 import threading
@@ -20,6 +22,8 @@ _queue_timeout_seconds = 15.0
 
 @dataclass(frozen=True)
 class ModelProfile:
+    """一个 OpenAI-compatible 模型端点的不可变运行参数。"""
+
     name: str
     model: str
     base_url: str
@@ -31,6 +35,8 @@ class ModelProfile:
 
 
 def initialize_llm_client(llm_client: BaseChatModel) -> None:
+    """安装单一默认模型，主要供确定性测试和简单调用方使用。"""
+
     global instance
     instance = llm_client
     _profiles["default"] = llm_client
@@ -43,10 +49,10 @@ def initialize_llm_profiles(
     max_concurrency: int = 20,
     queue_timeout_seconds: float = 15.0,
 ) -> None:
-    """Install an immutable-at-runtime node profile registry.
+    """安装运行期间不可变的节点模型 profile 注册表。
 
-    Longest run-name prefix wins. ``initialize_llm_client`` remains supported for
-    deterministic unit tests and callers that only need a default model.
+    run_name 使用最长前缀匹配；所有映射必须指向已注册 profile。全局有界信号
+    量限制并发模型调用，队列等待超过配置时间会明确失败而不是无限堆积。
     """
     if "default" not in clients:
         raise ValueError("model profile registry requires a default client")
@@ -65,6 +71,8 @@ def initialize_llm_profiles(
 
 
 def get_llm_client(profile: str | None = None, run_name: str | None = None) -> BaseChatModel:
+    """按显式 profile 或 run_name 前缀选择模型，最后回退到 default。"""
+
     if instance is None:
         raise RuntimeError("LLM client is not initialized")
     selected = profile or _profile_for_run(run_name or "")
@@ -72,11 +80,15 @@ def get_llm_client(profile: str | None = None, run_name: str | None = None) -> B
 
 
 def _profile_for_run(run_name: str) -> str:
+    """以最长匹配前缀解析节点 profile，避免短前缀遮蔽专用节点。"""
+
     matches = [prefix for prefix in _profile_by_run_prefix if run_name.startswith(prefix)]
     return _profile_by_run_prefix[max(matches, key=len)] if matches else "default"
 
 
 def _acquire_slot() -> threading.BoundedSemaphore | None:
+    """在超时内取得全局 LLM 并发槽，并记录排队/在途指标。"""
+
     semaphore = _slots
     if semaphore is not None:
         started=time.perf_counter(); llm_queue_depth.inc()
@@ -95,7 +107,7 @@ def invoke_llm(
     run_name: str,
     prompt_version: str = "v1",
 ) -> Any:
-    """Invoke the shared chat model with stable telemetry names."""
+    """调用选定模型并附加稳定的提示版本、节点和 profile 元数据。"""
     semaphore = _acquire_slot()
     try:
         return get_llm_client(run_name=run_name).invoke(

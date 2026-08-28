@@ -165,7 +165,7 @@ class QdrantKnowledgeStore(IKnowledgeStore):
         )
         return self._points_to_results(response.points)
 
-    def _single_search(self, raw_query: str, top_k: int, using: str, query: Any, query_filter: models.Filter) -> list[dict[str, Any]]:
+    def _single_search(self, top_k: int, using: str, query: Any, query_filter: models.Filter) -> list[dict[str, Any]]:
         response = self.client.query_points(
             collection_name=self.collection_name,
             query=query,
@@ -179,8 +179,8 @@ class QdrantKnowledgeStore(IKnowledgeStore):
         return self._points_to_results(response.points)
 
     def _client_weighted_rrf(self, query: str, top_k: int, query_filter: models.Filter) -> list[dict[str, Any]]:
-        dense_hits = self._single_search(query, self.prefetch_limit, self.dense_vector_name, self._dense_query(query), query_filter)
-        sparse_hits = self._single_search(query, self.prefetch_limit, self.sparse_vector_name, self._sparse_query(query), query_filter)
+        dense_hits = self._single_search(self.prefetch_limit, self.dense_vector_name, self._dense_query(query), query_filter)
+        sparse_hits = self._single_search(self.prefetch_limit, self.sparse_vector_name, self._sparse_query(query), query_filter)
         by_id: dict[str, dict[str, Any]] = {}
         rrf_k = 60.0
         for rank, hit in enumerate(dense_hits, start=1):

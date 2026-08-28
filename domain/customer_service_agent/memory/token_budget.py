@@ -1,3 +1,5 @@
+"""用供应商无关的保守估算为分层记忆分配模型上下文预算。"""
+
 from __future__ import annotations
 
 import math
@@ -12,11 +14,13 @@ from domain.customer_service_agent.memory.models import (
 
 
 class ConservativeTokenEstimator:
-    """Provider-neutral fallback that deliberately favors over-counting."""
+    """刻意倾向多计数的供应商无关估算器，避免提示实际超限。"""
 
     _segments = re.compile(r"[\u3400-\u9fff]|[A-Za-z0-9]+|[^\s]")
 
     def count(self, text: str) -> int:
+        """按中日韩字符、ASCII 词段和符号估算 token 数。"""
+
         total = 0
         for segment in self._segments.findall(text or ""):
             if len(segment) == 1 and "\u3400" <= segment <= "\u9fff":
@@ -28,17 +32,25 @@ class ConservativeTokenEstimator:
         return total
 
     def count_messages(self, messages: Sequence[ConversationMemoryMessage]) -> int:
+        """计算消息内容及角色/分隔符开销。"""
+
         return sum(self.count(message.role) + self.count(message.content) + 2 for message in messages)
 
     def count_references(self, references: Sequence[MemoryReference]) -> int:
+        """计算记忆文本及类型/分隔符开销。"""
+
         return sum(self.count(item.memory_type.value) + self.count(item.content) + 2 for item in references)
 
 
 class MemoryTokenBudgetAllocator:
+    """分别裁剪各层内容，并强制最终 MemoryPacket 不超过总预算。"""
+
     def __init__(self, estimator: ConservativeTokenEstimator | None = None) -> None:
         self.estimator = estimator or ConservativeTokenEstimator()
 
     def fit_text(self, text: str, budget: int) -> str:
+        """用二分查找保留预算内最长文本前缀。"""
+
         text = (text or "").strip()
         if not text or budget <= 0:
             return ""
@@ -58,6 +70,8 @@ class MemoryTokenBudgetAllocator:
         messages: Sequence[ConversationMemoryMessage],
         budget: int,
     ) -> list[ConversationMemoryMessage]:
+        """从最新消息向前选择，再恢复时间顺序。"""
+
         selected: list[ConversationMemoryMessage] = []
         remaining = max(0, budget)
         for message in reversed(messages):
@@ -80,6 +94,8 @@ class MemoryTokenBudgetAllocator:
         references: Sequence[MemoryReference],
         budget: int,
     ) -> list[MemoryReference]:
+        """按已排序相关度保留引用，最后一条允许截断。"""
+
         selected: list[MemoryReference] = []
         remaining = max(0, budget)
         for reference in references:
@@ -110,6 +126,8 @@ class MemoryTokenBudgetAllocator:
         semantic_budget: int,
         max_tokens: int,
     ) -> MemoryPacket:
+        """按分层预算裁剪内容，并优先削减语义记忆来消除总量溢出。"""
+
         fitted_summary = self.fit_text(summary, min(summary_budget, max_tokens))
         fitted_recent = self.fit_messages(recent_messages, min(recent_budget, max_tokens))
         fitted_episodes = self.fit_references(episodes, min(episode_budget, max_tokens))

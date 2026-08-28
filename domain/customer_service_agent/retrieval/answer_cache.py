@@ -1,3 +1,5 @@
+"""仅用于可安全复用的无上下文 RAG 回答的小型进程内缓存。"""
+
 from __future__ import annotations
 
 import threading
@@ -16,6 +18,8 @@ class TTLCache:
         self._lock = threading.Lock()
 
     def get(self, key: Any) -> Any | None:
+        """读取未过期值并刷新其 LRU 顺序。"""
+
         with self._lock:
             item = self._data.get(key)
             if item is None:
@@ -28,6 +32,8 @@ class TTLCache:
             return value
 
     def set(self, key: Any, value: Any) -> None:
+        """写入值并逐出最久未使用的超额条目。"""
+
         with self._lock:
             self._data[key] = (time.monotonic() + self._ttl, value)
             self._data.move_to_end(key)
@@ -35,6 +41,8 @@ class TTLCache:
                 self._data.popitem(last=False)
 
     def clear(self) -> None:
+        """线程安全地清空全部缓存，用于测试和知识重建。"""
+
         with self._lock:
             self._data.clear()
 

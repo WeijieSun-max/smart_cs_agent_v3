@@ -1,3 +1,5 @@
+"""扫描、冻结并按需加载版本化文件 Skill。"""
+
 from __future__ import annotations
 
 import hashlib
@@ -15,7 +17,12 @@ _REFERENCE_LINK = re.compile(r"\[[^\]]+\]\((references/[^)#?]+)(?:#[^)]+)?\)")
 
 
 class FileSkillCatalog:
-    """Frozen catalog whose only business source is ``**/SKILL.md``."""
+    """以 ``**/SKILL.md`` 为唯一业务来源的冻结目录。
+
+    启动阶段只解析 frontmatter 并记录整文件哈希；正文和引用资料在选中 Skill
+    后才加载。冻结后再次校验哈希，可防止一次请求在元数据校验后执行被替换
+    的说明或引用文件。
+    """
 
     def __init__(self, root: Path, tool_server: MCPToolServer):
         self.root = root.resolve()
@@ -25,6 +32,8 @@ class FileSkillCatalog:
         self._frozen = False
 
     def scan_and_freeze(self) -> None:
+        """扫描全部 Skill、验证唯一性和工具授权，并选出每个名称的最高版本。"""
+
         if self._frozen:
             raise RuntimeError("skill catalog is already frozen")
         if not self.root.is_dir():
@@ -57,6 +66,8 @@ class FileSkillCatalog:
         self._frozen = True
 
     def summaries(self) -> list[dict[str, object]]:
+        """返回供 Supervisor 选择的轻量索引，不提前暴露正文和引用。"""
+
         self._require_frozen()
         return [
             {
@@ -72,6 +83,8 @@ class FileSkillCatalog:
         ]
 
     def select(self, *, capability: str, agent_type: str) -> SkillIndexEntry | None:
+        """按能力和 Agent 类型选择唯一活跃 Skill；歧义时拒绝猜测。"""
+
         self._require_frozen()
         matches = [
             entry for entry in self._active_by_name.values()
@@ -83,6 +96,8 @@ class FileSkillCatalog:
         return matches[0] if matches else None
 
     def load(self, name: str, version: str | None = None, *, agent_type: str) -> LoadedSkill:
+        """校验调用方、文件哈希和引用路径后渐进加载 Skill 内容。"""
+
         self._require_frozen()
         entry = self._active_by_name.get(name) if version is None else self._entries.get((name, version))
         if entry is None:
@@ -112,6 +127,8 @@ class FileSkillCatalog:
         )
 
     def _validate_tool_contract(self, metadata: SkillMetadata) -> None:
+        """保证 Skill 只能声明已注册且效果、Agent 归属兼容的工具。"""
+
         for tool_name in metadata.allowed_tools:
             tool = self._tool_server.get_tool(tool_name)
             if tool is None:
@@ -123,11 +140,15 @@ class FileSkillCatalog:
                     raise ValueError(f"skill/tool agent contract mismatch: {tool_name}")
 
     def _require_frozen(self) -> None:
+        """阻止在启动校验完成前读取不稳定目录。"""
+
         if not self._frozen:
             raise RuntimeError("skill catalog is not frozen")
 
 
 def _semver(value: str) -> tuple[int, int, int]:
+    """把已由 Pydantic 校验的三段式语义版本转换为可比较元组。"""
+
     return tuple(int(part) for part in value.split("."))  # type: ignore[return-value]
 
 
@@ -135,6 +156,8 @@ _catalog: FileSkillCatalog | None = None
 
 
 def initialize_catalog(root: Path, tool_server: MCPToolServer) -> FileSkillCatalog:
+    """构建、冻结并安装进程级 Skill 目录。"""
+
     global _catalog
     catalog = FileSkillCatalog(root, tool_server)
     catalog.scan_and_freeze()
@@ -143,6 +166,8 @@ def initialize_catalog(root: Path, tool_server: MCPToolServer) -> FileSkillCatal
 
 
 def get_catalog() -> FileSkillCatalog:
+    """返回已冻结目录；基础设施尚未初始化时立即失败。"""
+
     if _catalog is None:
         raise RuntimeError("file skill catalog is not initialized")
     return _catalog

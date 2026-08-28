@@ -1,3 +1,5 @@
+"""电信/零售领域 Agent 的有界工具循环与安全执行策略。"""
+
 from __future__ import annotations
 
 import asyncio
@@ -33,6 +35,15 @@ logger = get_logger()
 _MAX_STEPS = 5
 _MAX_READ_CALLS = 4
 
+_TASK_BOUNDARY_PROMPT = """
+任务边界与身份解析：
+- 只处理 assignment.objective，不要回答、拒绝、转介或评论原始请求中的其他并行子任务；其他子任务由兄弟 Agent 负责。
+- assignment.arguments 是 Supervisor 已知的结构化参数；不得要求用户重复提供其中已有的信息。
+- user_id、session_id 等身份由 trusted context 注入，绝不能要求用户在对话中再次提供。
+- 若工具 Schema 未把 line_id、手机号或其他资源标识列为 required，直接省略该参数调用工具；工具会依据可信 user_id 自动解析唯一活跃资源。
+- 只有工具实际返回资源不唯一/不存在后，才可以请求用户消歧；不能仅因可选标识缺失而提前 clarify。
+"""
+
 _TOOL_AGENT_SYSTEM_PROMPT = """你是 {agent_name}，只处理分配给你的 {domain} 结构化业务任务。你通过受限工具获得事实，不得依赖关键词规则。
 
 执行要求：
@@ -62,6 +73,13 @@ async def run_tool_agent(
     state: ChatState,
     identity: RequestIdentityContext,
 ) -> AgentResult:
+    """在限定步骤和读取预算内完成一个结构化领域任务。
+
+    每轮模型只能从当前 Agent 和可选 Skill 的工具白名单中选择动作。读取结果
+    会作为不可信观察反馈给下一轮；写动作只创建待确认提议，并要求目标版本
+    已在本轮只读观察中出现。达到预算或模型输出非法时返回失败结果。
+    """
+
     domain: Literal["telecom", "retail"] = (
         "telecom" if assignment.agent == "telecom_agent" else "retail"
     )
@@ -85,7 +103,9 @@ async def run_tool_agent(
     for step in range(1, _MAX_STEPS + 1):
         payload = {
             "current_date": state.get("current_time") or "",
-            "user_query": state.get("normalized_query") or state.get("raw_query") or "",
+            # Supervisor 的 objective 是本 Agent 的唯一当前任务。完整原始请求可能
+            # 含兄弟领域子任务，不应进入本 Agent 的决策提示。
+            "user_query": assignment.objective,
             "assignment": assignment.model_dump(mode="json"),
             "conversation_context": conversation_context_payload(
                 state.get("conversation_context")
@@ -104,6 +124,7 @@ async def run_tool_agent(
                         _TOOL_AGENT_SYSTEM_PROMPT
                         .replace("{agent_name}", assignment.agent)
                         .replace("{domain}", domain)
+                        + _TASK_BOUNDARY_PROMPT
                     )),
                     HumanMessage(content=json.dumps(payload, ensure_ascii=False, default=str)[:30_000]),
                 ],
@@ -320,6 +341,12 @@ async def _execute_read_batch(
     *,
     max_concurrency: int,
 ) -> tuple[list[dict[str, Any]], int]:
+    """校验、去重并在信号量限制下并行执行独立只读调用。
+
+    返回结果保持原始调用顺序；只有真正进入执行队列的调用才消耗读取预算。
+    单个调用失败被收敛为观察项，不会取消同批其他独立读取。
+    """
+
     """Execute validated independent reads concurrently and preserve LLM order."""
 
     observations: list[dict[str, Any] | None] = [None] * len(calls)
@@ -370,6 +397,8 @@ async def _execute_read_batch(
     semaphore = asyncio.Semaphore(max_concurrency)
 
     async def execute(index: int, call: ReadToolCall) -> tuple[int, dict[str, Any]]:
+        """执行单个只读调用，并把异常转成对应位置的安全观察。"""
+
         async with semaphore:
             try:
                 result = await actions.execute_read(
@@ -414,6 +443,8 @@ async def _execute_read_batch(
 
 
 def _allowed_definitions(actions, agent_name: str, domain: str, skill: LoadedSkill | None):
+    """求领域、Agent 类型与 Skill 三重授权的工具交集。"""
+
     allowed_by_skill = set(skill.metadata.allowed_tools) if skill else None
     result = {}
     for item in actions.server.list_tools():
@@ -432,6 +463,8 @@ def _allowed_definitions(actions, agent_name: str, domain: str, skill: LoadedSki
 
 
 def _load_skill(assignment: AgentAssignment) -> LoadedSkill | None:
+    """按任务能力渐进加载 Skill；目录不可用或不匹配时安全退化为无 Skill。"""
+
     try:
         catalog = get_catalog()
         entry = catalog.select(
@@ -450,6 +483,8 @@ def _load_skill(assignment: AgentAssignment) -> LoadedSkill | None:
 
 
 def _skill_prompt(skill: LoadedSkill | None) -> dict[str, Any] | None:
+    """构造有长度上限的 Skill 提示载荷，防止引用耗尽模型上下文。"""
+
     if skill is None:
         return None
     return {
@@ -463,6 +498,8 @@ def _skill_prompt(skill: LoadedSkill | None) -> dict[str, Any] | None:
 
 
 def _skill_facts(skill: LoadedSkill) -> dict[str, Any]:
+    """记录可审计的 Skill 选择事实，不复制整段提示内容。"""
+
     return {
         "skill_selection": {
             **skill.identity(),
@@ -473,6 +510,8 @@ def _skill_facts(skill: LoadedSkill) -> dict[str, Any]:
 
 
 def _observed_version(value: Any, expected: int, *, key: str = "") -> bool:
+    """递归确认写操作期望版本确实来自本轮工具观察。"""
+
     if isinstance(value, dict):
         return any(
             _observed_version(item, expected, key=str(name))
@@ -489,6 +528,8 @@ def _observed_version(value: Any, expected: int, *, key: str = "") -> bool:
 
 
 def _failed(assignment: AgentAssignment, error_code: str, text: str) -> AgentResult:
+    """用统一字段构造关闭式领域 Agent 失败结果。"""
+
     return AgentResult(
         task_id=assignment.task_id,
         agent=assignment.agent,

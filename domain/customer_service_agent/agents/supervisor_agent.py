@@ -1,3 +1,5 @@
+"""LLM Supervisor 的结构化决策、确定性验证与关闭式降级。"""
+
 from __future__ import annotations
 
 import asyncio
@@ -68,6 +70,10 @@ JSON 格式：
 }
 """
 
+_COMPOSITE_RESULT_PROMPT = """
+复合请求结果规则：每个 AgentResult 只对其 assignment 负责。领域 Agent 对兄弟领域“无法查询、不在范围、请去其他平台”的评论不具有事实效力；若兄弟 Agent 已成功返回该领域结果，必须省略这些越界评论，保留成功工具事实。最终回复应按用户的各个子问题分段汇总，不得在展示成功结果的同时又声称系统无法查询同一事项。
+"""
+
 
 async def decide_next_step(
     state: ChatState,
@@ -75,6 +81,13 @@ async def decide_next_step(
     active_action: dict[str, Any] | None,
     allow_dispatch: bool,
 ) -> SupervisorDecision:
+    """让 Supervisor 选择下一步，并对模型输出实施严格领域校验。
+
+    提示词只提供候选语义；工具归属、依赖图、每批写能力数量、待确认动作
+    状态和最大轮次均由代码验证。模型不可用或输出非法时返回 `_safe_fallback`
+    的保守结果，不使用关键字规则替代意图判断。
+    """
+
     query = (state.get("raw_query") or "").strip()
     payload = {
         "current_date": state.get("current_time") or "",
@@ -93,7 +106,7 @@ async def decide_next_step(
         response = await asyncio.to_thread(
             invoke_llm,
             [
-                SystemMessage(content=_SUPERVISOR_SYSTEM_PROMPT),
+                SystemMessage(content=_SUPERVISOR_SYSTEM_PROMPT + _COMPOSITE_RESULT_PROMPT),
                 HumanMessage(content=json.dumps(payload, ensure_ascii=False, default=str)[:24_000]),
             ],
             run_name="supervisor.decide",
@@ -118,6 +131,8 @@ async def decide_next_step(
 
 
 def _capability_catalog() -> dict[str, list[str]]:
+    """从冻结工具注册表派生各 Agent 可路由能力，避免维护第二份词表。"""
+
     index = get_capability_index()
     result: dict[str, set[str]] = {
         "knowledge_agent": set(_KNOWLEDGE_CAPABILITIES),
@@ -145,6 +160,8 @@ def _validate_decision(
     active_action: dict[str, Any] | None,
     allow_dispatch: bool,
 ) -> None:
+    """验证 Supervisor 决策与当前工作流状态、能力契约是否一致。"""
+
     if active_action is not None and decision.action not in {
         "confirm_action",
         "reject_action",
@@ -185,6 +202,8 @@ def _validate_dependency_graph(
     assignments: tuple[AgentAssignment, ...],
     completed_task_ids: frozenset[str],
 ) -> None:
+    """对本轮未完成依赖执行深度优先检查，拒绝依赖环。"""
+
     graph = {
         item.task_id: tuple(dep for dep in item.dependencies if dep not in completed_task_ids)
         for item in assignments
@@ -193,6 +212,8 @@ def _validate_dependency_graph(
     visited: set[str] = set()
 
     def visit(task_id: str) -> None:
+        """深度优先访问依赖节点并维护临时/永久标记集合。"""
+
         if task_id in visiting:
             raise ValueError("assignment dependency cycle")
         if task_id in visited:
@@ -208,6 +229,8 @@ def _validate_dependency_graph(
 
 
 def _public_results(state: ChatState) -> list[dict[str, Any]]:
+    """只把经过 AgentResult 校验的公开结果反馈给 Supervisor。"""
+
     output: list[dict[str, Any]] = []
     for value in (state.get("task_results") or {}).values():
         try:
@@ -229,6 +252,8 @@ def _safe_fallback(
     state: ChatState,
     active_action: dict[str, Any] | None,
 ) -> SupervisorDecision:
+    """在模型失败时保护待确认动作，并尽可能返回已有可靠片段。"""
+
     query = (state.get("raw_query") or "").strip() or "当前请求"
     if active_action is not None:
         summary = str(active_action.get("impact_summary") or "当前操作")

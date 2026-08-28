@@ -1,3 +1,5 @@
+"""把分层记忆转换为结构化上下文，而不向消息列表重放历史对话。"""
+
 from __future__ import annotations
 
 from domain.customer_service_agent.memory.conversation_context import (
@@ -10,7 +12,7 @@ from domain.customer_service_agent.workflow.entity.chat_state import ChatState
 
 
 def history_fusion_node(state: ChatState) -> dict:
-    """Build the structured LLM context without replaying historical chat messages."""
+    """优先使用已预算记忆包，否则规范化近期上下文并返回状态增量。"""
 
     packet_data = state.get("memory_packet")
     if packet_data:

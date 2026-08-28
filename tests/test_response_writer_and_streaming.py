@@ -52,6 +52,25 @@ def test_multiple_agent_results_use_response_writer(monkeypatch) -> None:
     assert result["node_logs"] == ["Response draft completed: llm"]
 
 
+def test_multiple_results_are_recomposed_even_when_supervisor_already_replied(monkeypatch) -> None:
+    captured = {}
+
+    def invoke(messages, **_kwargs):
+        captured["system"] = messages[0].content
+        return SimpleNamespace(content='{"response":"流量信息。\\n\\n订单信息。"}')
+
+    monkeypatch.setattr(response_writer_node, "invoke_llm", invoke)
+    state = _state_with_results("流量信息。", "订单信息。")
+    state["supervisor_response"] = "流量信息，但无法查询订单。订单信息，但无法查询流量。"
+    state["supervisor_response_source"] = "llm"
+
+    result = response_writer_node.response_writer_node(state)
+
+    assert result["draft_response"] == "流量信息。\n\n订单信息。"
+    assert "不得输出互相矛盾" in captured["system"]
+    assert result["node_logs"] == ["Response draft completed: llm"]
+
+
 def test_unsafe_writer_output_is_blocked_before_final_emission(monkeypatch) -> None:
     monkeypatch.setattr(
         response_writer_node,

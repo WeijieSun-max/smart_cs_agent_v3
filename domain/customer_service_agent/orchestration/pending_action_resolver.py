@@ -1,3 +1,5 @@
+"""把 Supervisor 已分类的确认/拒绝决定映射到治理动作状态机。"""
+
 from __future__ import annotations
 
 import asyncio
@@ -13,10 +15,10 @@ async def resolve_pending_action(
     identity: RequestIdentityContext,
     decision: Literal["confirm_action", "reject_action"] | None = None,
 ) -> dict[str, Any] | None:
-    """Apply an already-classified LLM decision to the active governed action.
+    """对活跃治理动作应用已经分类的 LLM 决定。
 
-    This function deliberately does not interpret user text. The supervisor is
-    the only intent classifier; this layer only enforces the action state machine.
+    本函数刻意不解释用户原文：Supervisor 是唯一意图分类器，这一层只验证
+    动作是否存在并执行确定性状态迁移。`decision=None` 时只生成确认提示。
     """
     try:
         actions = get_action_service()
@@ -55,6 +57,8 @@ def _build_result(
     *,
     task_results: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    """构造合并回父图的最小状态增量。"""
+
     return {
         "intent": intent,
         "current_agent": "action_governance",
@@ -65,6 +69,8 @@ def _build_result(
 
 
 def _action_result_text(status: str, summary: str, receipt: dict[str, Any] | None) -> str:
+    """把治理终态转换为用户可见文本，并明确区分成功与结果未知。"""
+
     if status == "succeeded":
         return f"操作已完成：{summary}。\n执行回执：{json.dumps(receipt or {}, ensure_ascii=False, default=str)}"
     if status == "indeterminate":

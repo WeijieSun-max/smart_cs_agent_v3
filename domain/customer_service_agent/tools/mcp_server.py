@@ -1,3 +1,5 @@
+"""进程内 MCP 风格工具注册、参数验证、执行隔离和审计日志。"""
+
 from __future__ import annotations
 
 import time
@@ -22,6 +24,8 @@ ConfirmationPolicy = Literal["never", "always"]
 
 @dataclass(frozen=True)
 class ToolDefinition:
+    """工具处理器及其授权、风险、效果和并行性元数据。"""
+
     name: str
     description: str
     input_schema: dict[str, Any]
@@ -40,6 +44,8 @@ class ToolDefinition:
 
 @dataclass
 class ToolCallResult:
+    """一次工具调用的安全结果和可观测字段。"""
+
     tool_name: str
     success: bool
     result: Any = None
@@ -51,6 +57,13 @@ class ToolCallResult:
 
 
 class MCPToolServer:
+    """工具的唯一注册与执行边界。
+
+    注册时强制所有写工具可幂等、必须确认且不可并行；调用时再次运行 JSON
+    Schema，并只从 `trusted_context` 注入身份。异常被转换为安全错误码，原始
+    异常文本不会进入 Agent 观察或调用日志。
+    """
+
     def __init__(self):
         self._tools: dict[str, ToolDefinition] = {}
         self._call_log: deque[ToolCallResult] = deque(maxlen=get_settings().tool_call_log_limit)
@@ -72,6 +85,8 @@ class MCPToolServer:
         confirmation_policy: ConfirmationPolicy | None = None,
         parallel_safe: bool | None = None,
     ) -> Callable:
+        """验证工具元数据和处理器签名，并返回注册装饰器。"""
+
         if effect not in ("read", "write"):
             raise ValueError("effect must be 'read' or 'write'")
         if type(supports_idempotency) is not bool:
@@ -86,6 +101,8 @@ class MCPToolServer:
             raise ValueError("write tools cannot be parallel safe")
 
         def decorator(func: Callable[..., Awaitable[Any]]) -> Callable[..., Awaitable[Any]]:
+            """冻结处理器及注册时元数据，并拒绝重名工具。"""
+
             if name in self._tools:
                 raise ValueError(f"duplicate tool name: {name}")
             self._validate_handler_contract(func)
@@ -110,6 +127,8 @@ class MCPToolServer:
         return decorator
 
     def list_tools(self, category: str | None = None) -> list[dict[str, Any]]:
+        """返回深拷贝的公开工具契约，可选按类别过滤。"""
+
         return [
             {
                 "name": tool.name,
@@ -131,6 +150,8 @@ class MCPToolServer:
         ]
 
     def get_tool(self, name: str) -> ToolDefinition | None:
+        """取得隔离副本，防止调用方修改已注册 Schema 或元数据。"""
+
         tool = self._tools.get(name)
         if tool is None:
             return None
@@ -152,6 +173,8 @@ class MCPToolServer:
         )
 
     def validate_arguments(self, name: str, arguments: dict[str, Any]) -> None:
+        """按注册 JSON Schema 验证参数，未知工具统一视为校验失败。"""
+
         tool = self._tools.get(name)
         if tool is None:
             raise ToolValidationError()
@@ -164,6 +187,12 @@ class MCPToolServer:
         *,
         trusted_context: dict[str, Any] | None = None,
     ) -> ToolCallResult:
+        """执行已校验工具，并把异常收敛为安全、可审计结果。
+
+        写工具额外要求治理服务注入 `governed_action` 标记，从执行边界阻断
+        原始工具 API 或模型直接调用写处理器。
+        """
+
         tool = self._tools.get(name)
         if tool is None:
             result = ToolCallResult(
@@ -209,6 +238,8 @@ class MCPToolServer:
 
     @staticmethod
     def _validate_handler_contract(func: Callable[..., Awaitable[Any]]) -> None:
+        """确保处理器显式接受可信上下文或任意关键字参数。"""
+
         try:
             parameters = signature(func).parameters
         except (TypeError, ValueError) as exc:
@@ -226,6 +257,8 @@ class MCPToolServer:
 
     @staticmethod
     def _validate_arguments(tool: ToolDefinition, arguments: dict[str, Any]) -> None:
+        """校验 Schema 本身及参数，并默认禁止未声明字段。"""
+
         if not isinstance(arguments, dict):
             raise ToolValidationError()
         schema = {**tool.input_schema}
@@ -238,6 +271,8 @@ class MCPToolServer:
             raise ToolValidationError() from exc
 
     def get_call_log(self, last_n: int = 100) -> list[dict[str, Any]]:
+        """返回最近调用的脱敏摘要，不包含参数、结果或原始异常。"""
+
         return [
             {
                 "tool": item.tool_name,

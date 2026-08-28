@@ -1,3 +1,5 @@
+"""从摘要、近期消息和长期记忆构造用户隔离的有界上下文。"""
+
 from __future__ import annotations
 
 import re
@@ -30,7 +32,12 @@ _TYPE_PRIORITY = {
 
 
 class MemoryOrchestrator:
-    """Build a user-isolated, MySQL-validated and budgeted memory packet."""
+    """构建经 MySQL 复核、用户隔离且受 token 预算约束的记忆包。
+
+    向量索引只返回候选 ID，最终内容必须回源权威仓储并再次检查用户、状态、
+    有效期和过期时间。任一可选缓存/索引失败都会降级；权威仓储也失败时返回
+    空层，不把未验证的向量 payload 注入模型。
+    """
 
     def __init__(
         self,
@@ -59,6 +66,8 @@ class MemoryOrchestrator:
         query: str,
         current_turn_id: str,
     ) -> MemoryPacket:
+        """读取、召回、排序、去重并裁剪单轮会话记忆。"""
+
         started = perf_counter()
         self._diagnostics = {"candidates": 0, "hydrated": 0, "filtered": 0, "fallback": False}
         now = self.clock()
@@ -95,6 +104,8 @@ class MemoryOrchestrator:
         return packet
 
     def _read_summary(self, user_id: str, session_id: str) -> str:
+        """优先读取已验证缓存，失败时回源仓储并尽力回填缓存。"""
+
         get_cached = getattr(self.short_term_memory, "get_session_summary", None)
         if callable(get_cached):
             try:
@@ -126,6 +137,8 @@ class MemoryOrchestrator:
         session_id: str,
         current_turn_id: str,
     ) -> list[ConversationMemoryMessage]:
+        """读取近期消息，排除当前轮并过滤非法角色、空内容和畸形时间。"""
+
         try:
             history = self.short_term_memory.get_history(session_id)
         except Exception as exc:
@@ -147,6 +160,8 @@ class MemoryOrchestrator:
         return result
 
     def _recall(self, user_id: str, query: str, now: datetime) -> list[tuple[MemoryItem, MemoryReference]]:
+        """优先语义召回；失败时用权威活跃项和词法重合度降级。"""
+
         score_by_id: dict[str, float] = {}
         candidates: Sequence[MemoryItem]
         try:
@@ -218,6 +233,8 @@ class MemoryOrchestrator:
 
     @staticmethod
     def _valid_for_user(item: MemoryItem, user_id: str, now: datetime) -> bool:
+        """复核所有权、活跃状态以及业务有效期和保留期限。"""
+
         return bool(
             item.user_id == user_id
             and item.status == MemoryStatus.ACTIVE
@@ -228,6 +245,8 @@ class MemoryOrchestrator:
 
     @staticmethod
     def _score(item: MemoryItem, similarity: float, now: datetime) -> float:
+        """综合相似度、新近度、置信度和记忆类型优先级。"""
+
         age_days = max(0.0, (now - item.updated_at).total_seconds() / 86400)
         recency = 1.0 / (1.0 + age_days / 30.0)
         score = (
@@ -240,6 +259,8 @@ class MemoryOrchestrator:
 
     @staticmethod
     def _deduplicate(scored: Sequence[tuple[MemoryItem, float]]) -> list[tuple[MemoryItem, float]]:
+        """按语义键及 0.92 文本相似度保留排序最优版本。"""
+
         selected: list[tuple[MemoryItem, float]] = []
         keys: set[tuple[MemoryType, str]] = set()
         normalized_contents: list[str] = []
@@ -257,6 +278,8 @@ class MemoryOrchestrator:
 
 
 def _parse_timestamp(value) -> datetime | None:
+    """把 datetime/ISO 文本规范为有时区时间，畸形值返回 None。"""
+
     if isinstance(value, datetime):
         return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
     if isinstance(value, str) and value:
@@ -269,10 +292,14 @@ def _parse_timestamp(value) -> datetime | None:
 
 
 def _normalize_content(value: str) -> str:
+    """移除标点和大小写差异，供近重复检测使用。"""
+
     return re.sub(r"\W+", "", value, flags=re.UNICODE).lower()
 
 
 def _lexical_score(query: str, content: str) -> float:
+    """计算查询字符/词项被内容覆盖的比例，作为无向量时的保守分数。"""
+
     query_terms = set(re.findall(r"[\w\u3400-\u9fff]", query.lower()))
     content_terms = set(re.findall(r"[\w\u3400-\u9fff]", content.lower()))
     if not query_terms:

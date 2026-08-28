@@ -1,3 +1,5 @@
+"""决定候选记忆能否持久化的确定性安全与保留策略。"""
+
 from __future__ import annotations
 
 import json
@@ -12,6 +14,8 @@ from domain.customer_service_agent.policy.pii import detect_pii
 
 @dataclass(frozen=True)
 class MemoryPolicyConfig:
+    """各记忆类型的最低置信度和默认保留天数。"""
+
     episode_min_confidence: float = 0.70
     preference_min_confidence: float = 0.85
     fact_min_confidence: float = 0.85
@@ -24,6 +28,8 @@ class MemoryPolicyConfig:
 
 @dataclass(frozen=True)
 class MemoryPolicyDecision:
+    """候选规范化、拒绝原因和过期时间的完整策略结果。"""
+
     accepted: bool
     memory_key: str
     reasons: tuple[str, ...]
@@ -49,6 +55,8 @@ _DYNAMIC_KEY_PREFIXES = (
 
 
 def normalize_memory_key(value: str) -> str:
+    """把自由文本键规范化为稳定、可比较且有长度上限的索引键。"""
+
     normalized = unicodedata.normalize("NFKC", value).strip().lower()
     normalized = re.sub(r"[\s:/\\]+", ".", normalized)
     normalized = re.sub(r"[^a-z0-9._\-㐀-鿿]", "", normalized)
@@ -57,10 +65,18 @@ def normalize_memory_key(value: str) -> str:
 
 
 class MemoryPolicy:
+    """过滤 PII、凭证、提示注入、动态业务状态和低置信度候选。
+
+    动态余额、订单状态等事实不得进入长期记忆，因为它们会过时且可能影响
+    授权或写操作；这些数据必须每轮从权威业务工具重新读取。
+    """
+
     def __init__(self, config: MemoryPolicyConfig) -> None:
         self.config = config
 
     def evaluate(self, candidate: MemoryCandidate, now: datetime) -> MemoryPolicyDecision:
+        """一次性运行全部规则并返回所有拒绝原因，便于审计和指标统计。"""
+
         memory_key = normalize_memory_key(candidate.memory_key)
         reasons: list[str] = []
         serialized = json.dumps(candidate.structured_data, ensure_ascii=False, sort_keys=True)
@@ -85,6 +101,8 @@ class MemoryPolicy:
         )
 
     def _threshold(self, memory_type: MemoryType) -> float:
+        """返回该语义类型的最低接受置信度。"""
+
         return {
             MemoryType.EPISODE: self.config.episode_min_confidence,
             MemoryType.PREFERENCE: self.config.preference_min_confidence,
@@ -93,6 +111,8 @@ class MemoryPolicy:
         }[memory_type]
 
     def _ttl_days(self, memory_type: MemoryType) -> int:
+        """返回该语义类型的默认保留期。"""
+
         return {
             MemoryType.EPISODE: self.config.episode_ttl_days,
             MemoryType.PREFERENCE: self.config.preference_ttl_days,

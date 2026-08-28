@@ -1,3 +1,5 @@
+"""把领域 Agent 执行器包装为独立、可组合的 LangGraph 子图。"""
+
 from __future__ import annotations
 
 from typing import Any, TypedDict
@@ -12,6 +14,12 @@ from domain.shared.identity import RequestIdentityContext
 
 
 class DomainAgentState(TypedDict):
+    """领域子图的最小输入输出状态。
+
+    `parent_state` 只供本次任务读取；子图只返回序列化的 `result`，从而避免
+    并行 Agent 直接覆盖父图中的共享字段。
+    """
+
     parent_state: ChatState
     identity: RequestIdentityContext
     assignment: dict[str, Any]
@@ -19,20 +27,28 @@ class DomainAgentState(TypedDict):
 
 
 async def _knowledge_executor(state: DomainAgentState) -> dict[str, Any]:
+    """校验 assignment 后调用只读知识 Agent。"""
+
     assignment = AgentAssignment.model_validate(state["assignment"])
     result = await run_knowledge_agent(assignment, state["parent_state"])
     return {"result": result.model_dump(mode="json")}
 
 
 async def _telecom_executor(state: DomainAgentState) -> dict[str, Any]:
+    """在电信 Agent 身份约束下执行结构化工具任务。"""
+
     return await _tool_executor(state, "telecom_agent")
 
 
 async def _retail_executor(state: DomainAgentState) -> dict[str, Any]:
+    """在零售 Agent 身份约束下执行结构化工具任务。"""
+
     return await _tool_executor(state, "retail_agent")
 
 
 async def _tool_executor(state: DomainAgentState, expected_agent: str) -> dict[str, Any]:
+    """拒绝跨领域误分配，再把任务交给通用工具 Agent。"""
+
     assignment = AgentAssignment.model_validate(state["assignment"])
     if assignment.agent != expected_agent:
         result = AgentResult(
@@ -52,6 +68,8 @@ async def _tool_executor(state: DomainAgentState, expected_agent: str) -> dict[s
 
 
 def _build_subgraph(executor) -> Any:
+    """构建只有一个受控执行节点的领域子图。"""
+
     graph = StateGraph(DomainAgentState)
     graph.add_node("execute", executor)
     graph.add_edge(START, "execute")

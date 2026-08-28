@@ -1,3 +1,5 @@
+"""组装带持久化 checkpoint 和不可绕过合规节点的客服工作流。"""
+
 from __future__ import annotations
 
 from typing import Any
@@ -28,6 +30,8 @@ logger=get_logger(); _workflow: Any | None=None
 
 
 def initialize_workflow() -> None:
+    """编译进程级工作流，并报告工具能力契约漂移。"""
+
     global _workflow
     _workflow=_build_customer_service_workflow()
     _report_capability_contracts()
@@ -35,6 +39,8 @@ def initialize_workflow() -> None:
 
 
 def _report_capability_contracts() -> None:
+    """记录能力元数据问题；启动后仍由各执行边界继续强制校验。"""
+
     from domain.customer_service_agent.orchestration.capability_index import validate_capability_contracts
 
     problems = validate_capability_contracts()
@@ -45,11 +51,19 @@ def _report_capability_contracts() -> None:
 
 
 def get_workflow() -> Any:
+    """返回已编译图；依赖尚未完成时立即失败。"""
+
     if _workflow is None: raise RuntimeError("Customer service workflow has not been initialized")
     return _workflow
 
 
 def _build_customer_service_workflow() -> Any:
+    """构建主图并确保所有响应路径都经过 writer、compliance 和 synthesizer。
+
+    Supervisor 与领域 Agent 可有界往返；治理动作单独进入确定性执行节点。
+    无论哪条分支结束，草稿都必须先经过合规检查，之后才能写入最终响应。
+    """
+
     workflow=StateGraph(ChatState)
     workflow.add_node("history_fusion_node",history_fusion_node)
     workflow.add_node("supervisor_manager_node",RunnableLambda(supervisor_manager_node_sync,afunc=supervisor_manager_node))

@@ -1,3 +1,5 @@
+"""从领域知识库检索证据并生成带引用、不可越界的回答。"""
+
 from __future__ import annotations
 
 import asyncio
@@ -21,6 +23,13 @@ async def retrieve_grounded_answer(
     domain: str,
     capability: str,
 ) -> dict[str, Any]:
+    """检索领域文档并让 LLM 仅依据片段生成答案。
+
+    会话上下文只用于指代消解，不能充当事实证据。仅当上下文为空时才缓存
+    回答，缓存键包含文档 ID 和版本，避免知识更新或不同对话语境复用旧答案。
+    无文档时明确返回未 grounded 结果并建议人工处理。
+    """
+
     document_type = "troubleshooting" if domain == "telecom" else "policy"
     docs = await asyncio.to_thread(
         knowledge_service.get_service().search_domain,
@@ -102,6 +111,8 @@ def _grounded_update(
     answer: str,
     citations: list[dict[str, Any]],
 ) -> dict[str, Any]:
+    """把有依据答案和引用元数据包装为工作流状态增量。"""
+
     return _state_update(
         state,
         domain,
@@ -123,6 +134,8 @@ def _state_update(
     text: str,
     task_results: dict[str, Any],
 ) -> dict[str, Any]:
+    """构造 Knowledge Agent 返回父图的统一字段集合。"""
+
     return {
         "intent": domain,
         "current_agent": "supervisor",
