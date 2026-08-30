@@ -8,6 +8,12 @@ from fastapi import HTTPException
 def raise_running_agent_conflict(exc: RuntimeError) -> NoReturn:
     if "already has a running agent" in str(exc):
         raise HTTPException(status_code=409, detail="当前会话已有 Agent 正在运行") from exc
+    if "turn queue is full" in str(exc) or "admission queue" in str(exc):
+        raise HTTPException(
+            status_code=503,
+            detail="系统繁忙，请稍后重试",
+            headers={"Retry-After": "2"},
+        ) from exc
     raise exc
 
 

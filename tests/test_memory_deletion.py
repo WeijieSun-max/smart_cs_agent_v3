@@ -98,7 +98,7 @@ def test_archive_deletes_session_and_memory_sources_in_one_transaction() -> None
     cascade = MemoryCascadeSpy()
     archive = MySQLConversationArchive.__new__(MySQLConversationArchive)
     archive.mysql_client = client
-    archive.user_id = "user-1"
+    archive._default_user_id = "user-1"
     archive.memory_repository = cascade
     archive._ready = True
 

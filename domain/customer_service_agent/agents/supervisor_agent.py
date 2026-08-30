@@ -68,9 +68,7 @@ JSON 格式：
   "clarification_question":null,
   "confidence":0.95
 }
-"""
 
-_COMPOSITE_RESULT_PROMPT = """
 复合请求结果规则：每个 AgentResult 只对其 assignment 负责。领域 Agent 对兄弟领域“无法查询、不在范围、请去其他平台”的评论不具有事实效力；若兄弟 Agent 已成功返回该领域结果，必须省略这些越界评论，保留成功工具事实。最终回复应按用户的各个子问题分段汇总，不得在展示成功结果的同时又声称系统无法查询同一事项。
 """
 
@@ -106,7 +104,7 @@ async def decide_next_step(
         response = await asyncio.to_thread(
             invoke_llm,
             [
-                SystemMessage(content=_SUPERVISOR_SYSTEM_PROMPT + _COMPOSITE_RESULT_PROMPT),
+                SystemMessage(content=_SUPERVISOR_SYSTEM_PROMPT),
                 HumanMessage(content=json.dumps(payload, ensure_ascii=False, default=str)[:24_000]),
             ],
             run_name="supervisor.decide",

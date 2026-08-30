@@ -46,9 +46,20 @@ class CheckpointSaverService:
 
         return ThreadIdentity(user_id=user_id, session_id=session_id).thread_id
 
-    def clear_thread(self, user_id: Optional[str], session_id: str) -> None:
+    def clear_thread(
+        self,
+        user_id: Optional[str],
+        session_id: str,
+        *,
+        checkpoint_ns: str | None = None,
+    ) -> None:
         """在保存器支持时删除指定用户会话的 checkpoint。"""
 
+        if checkpoint_ns is not None:
+            delete_namespace = getattr(self._checkpointer, "delete_thread_namespace", None)
+            if callable(delete_namespace):
+                delete_namespace(self.get_thread_id(user_id, session_id), checkpoint_ns)
+                return
         delete_thread = getattr(self._checkpointer, "delete_thread", None)
         if callable(delete_thread):
             delete_thread(self.get_thread_id(user_id, session_id))

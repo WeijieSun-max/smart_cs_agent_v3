@@ -12,7 +12,8 @@ FastAPI + LangGraph 的模块化单体，面向移联电信与商城客服。MyS
 - Telecom：套餐/使用量查询、套餐变更、流量补充、漫游；通信故障永久为带文档版本和引用的 RAG 指导，不存在设备 adapter。
 - Retail：完整地址/联系电话查询、新增地址并设为默认、支付方式、商品/库存、订单、取消、地址/支付/商品修改、退货、换货、差价退款。
 - 所有业务数据库写操作统一进入 governed action：两次 active 用户查询、资源版本、冻结参数摘要、二次确认、幂等事务、回读回执及未知状态对账。
-- MySQL durable LangGraph checkpoint、会话串行/有界队列、全局 LLM 20 并发与节点级 Model Profile。
+- MySQL durable LangGraph checkpoint、跨进程会话租约与 fencing token；单 worker 默认 8 个活跃回合、32 个排队请求，同一用户会话严格串行。
+- 同步后台任务与异步 Web 节点共享全局 LLM 20 并发、40 排队容量和节点级 Model Profile。
 - 四层记忆、20-turn + 增量阈值异步摘要、类型化 TTL、Qdrant 删除 outbox。
 - Prometheus `/metrics`、Langfuse、可回放评测 Harness、tau2 adapter、shadow/canary 稳定用户桶。
 
@@ -74,6 +75,17 @@ DB_PORT=3306
 DB_USER=root
 DB_PASSWORD=your-password
 DB_NAME=assist_gen
+
+# 以下并发上限均为单个 worker 的上限
+TURN_MAX_CONCURRENCY=8
+TURN_QUEUE_CAPACITY=32
+TURN_QUEUE_TIMEOUT_SECONDS=5
+PER_SESSION_QUEUE_LIMIT=2
+TURN_DISTRIBUTED_LEASE_ENABLED=true
+TURN_LEASE_SECONDS=30
+TURN_LEASE_HEARTBEAT_SECONDS=5
+LLM_MAX_CONCURRENCY=20
+LLM_QUEUE_CAPACITY=40
 ```
 
 各节点可分别通过 `QWEN_SUPERVISOR_MODEL`、`QWEN_KNOWLEDGE_AGENT_MODEL`、`QWEN_TELECOM_AGENT_MODEL`、`QWEN_RETAIL_AGENT_MODEL`、`QWEN_RESPONSE_WRITER_MODEL`、`QWEN_SAFETY_GUARD_MODEL`、`QWEN_MEMORY_MODEL` 及对应的 `*_BASE_URL` 覆盖；留空继承 `QWEN_MODEL` / `QWEN_BASE_URL`。意图识别与任务拆解均由 Supervisor LLM 完成，不再保留独立 Planner 或查询改写配置。
@@ -95,6 +107,7 @@ D:\python\agentProject\.venv\Scripts\python.exe main.py
 ```
 
 启动时会校验 migration checksum、执行未应用 DDL、校验并冻结 Skill Catalog，然后编译 durable LangGraph。
+多 worker 部署时，会话互斥和停止信号仍由 MySQL 保证；资源并发上限按 worker 数量相乘，需同步扩容 MySQL/Redis 连接池，或按总预算下调每个 worker 的上限。
 
 ## API
 

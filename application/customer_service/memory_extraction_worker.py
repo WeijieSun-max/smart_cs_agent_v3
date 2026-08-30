@@ -3,6 +3,7 @@ from __future__ import annotations
 import threading
 import uuid
 from datetime import datetime, timedelta, timezone
+from inspect import Parameter, signature
 
 from domain.customer_service_agent.memory.models import (
     MemoryItem,
@@ -149,7 +150,12 @@ class MemoryExtractionWorker:
         cache_summary = getattr(self.summary_cache, "cache_session_summary", None)
         if callable(cache_summary):
             try:
-                cache_summary(session_id, summary.model_dump(mode="json"))
+                _call_user_scoped(
+                    cache_summary,
+                    session_id,
+                    summary.model_dump(mode="json"),
+                    user_id=user_id,
+                )
             except Exception as exc:
                 logger.warning("Memory summary cache update failed error_type={}", type(exc).__name__)
         memory_metrics.record_extraction("created", len(items))
@@ -215,3 +221,19 @@ class MemoryExtractionWorker:
                     error["error_code"],
                 )
             self._stop.wait(self.poll_seconds)
+
+
+def _call_user_scoped(method, *args, user_id: str):
+    """Pass the tenant scope to modern caches without breaking legacy adapters."""
+
+    try:
+        parameters = signature(method).parameters.values()
+    except (TypeError, ValueError):
+        return method(*args, user_id=user_id)
+    supports_scope = any(
+        parameter.name == "user_id" or parameter.kind == Parameter.VAR_KEYWORD
+        for parameter in parameters
+    )
+    if supports_scope:
+        return method(*args, user_id=user_id)
+    return method(*args)

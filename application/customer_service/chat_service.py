@@ -20,6 +20,7 @@ from application.customer_service.turn_context import (
     prepare_turn as _prepare_turn,
     validate_turn_request as _validate_turn_request,
 )
+from application.customer_service.turn_lease_service import TurnLease, get_turn_lease_manager
 from application.customer_service.workflow_run_recorder import WorkflowRunRecorder as _WorkflowRunRecorder
 from domain.customer_service_agent.service import short_term_memory_service
 from domain.customer_service_agent.workflow import customer_service_workflow
@@ -38,7 +39,7 @@ SAFE_ERROR_MESSAGE = "系统处理异常，请稍后重试。"
 
 
 async def chat(request: ChatRequest) -> ChatResponse:
-    async with turn_admission.slot(request.user_id or "anonymous"):
+    async with turn_admission.slot(request.user_id or "anonymous", request.session_id):
         return await _chat_admitted(request)
 
 
@@ -55,14 +56,33 @@ async def _chat_admitted(request: ChatRequest) -> ChatResponse:
             intent="replayed",
             compliance_passed=True,
         )
+    async with get_turn_lease_manager().hold(user_id, session_id, turn.turn_id) as lease:
+        return await _execute_chat_turn(request, graph, user_id, state, turn, lease)
+
+
+async def _execute_chat_turn(request, graph, user_id: str, state: dict[str, Any], turn, lease: TurnLease) -> ChatResponse:
     settings = get_settings()
     model, provider = _resolve_model_identity(settings)
-    run = await asyncio.to_thread(agent_run_service.registry.begin, session_id, turn.turn_id)
+    session_id = state["session_id"]
+    run = await asyncio.to_thread(
+        agent_run_service.registry.begin,
+        session_id,
+        turn.turn_id,
+        user_id=user_id,
+    )
+    run.stop_requested = lease.stop_requested
     run.attach_current_task()
     memory = short_term_memory_service.get_service()
     try:
         if not state.get("user_message_persisted"):
-            await asyncio.to_thread(memory.add_message, session_id, "user", request.message, turn.turn_id)
+            await asyncio.to_thread(
+                memory.add_message,
+                session_id,
+                "user",
+                request.message,
+                turn.turn_id,
+                user_id=user_id,
+            )
         await asyncio.to_thread(
             agent_run_service.registry.record_step,
             run,
@@ -86,7 +106,12 @@ async def _chat_admitted(request: ChatRequest) -> ChatResponse:
         input_text=request.message,
     ) as root:
         try:
-            config = _build_graph_config(user_id, session_id, turn.turn_id)
+            config = _build_graph_config(
+                user_id,
+                session_id,
+                turn.turn_id,
+                checkpoint_ns=lease.checkpoint_namespace,
+            )
             async for event in graph.astream_events(state, config=config, version="v2"):
                 recorder.record_model_event(event)
                 recorder.start_node(event)
@@ -102,6 +127,8 @@ async def _chat_admitted(request: ChatRequest) -> ChatResponse:
                 final_response,
                 turn.turn_id,
                 settings.memory_layered_enabled,
+                user_id,
+                lease,
             )
         except asyncio.CancelledError as exc:
             recorder.fail_active()
@@ -112,7 +139,7 @@ async def _chat_admitted(request: ChatRequest) -> ChatResponse:
                 error=None if run.stop_requested.is_set() else exc,
             )
             agent_run_service.registry.finish(run, "stopped" if run.stop_requested.is_set() else "cancelled")
-            _clear_checkpoint(user_id, session_id)
+            _clear_checkpoint(user_id, session_id, lease.checkpoint_namespace)
             raise
         except Exception as exc:
             recorder.fail_active()
@@ -134,11 +161,11 @@ async def _chat_admitted(request: ChatRequest) -> ChatResponse:
 
     if caught is not None:
         agent_run_service.registry.finish(run, "failed")
-        _clear_checkpoint(user_id, session_id)
+        _clear_checkpoint(user_id, session_id, lease.checkpoint_namespace)
         exc, traceback = caught
         raise exc.with_traceback(traceback)
     agent_run_service.registry.finish(run, "completed")
-    _clear_checkpoint(user_id, session_id)
+    _clear_checkpoint(user_id, session_id, lease.checkpoint_namespace)
     return ChatResponse(
         response=final_response,
         session_id=session_id,
@@ -158,11 +185,17 @@ def chat_stream(request: ChatStreamRequest) -> StreamingResponse:
     )
 
 
-def _build_graph_config(user_id: str | None, session_id: str, turn_id: str | None = None) -> dict[str, Any]:
+def _build_graph_config(
+    user_id: str | None,
+    session_id: str,
+    turn_id: str | None = None,
+    *,
+    checkpoint_ns: str = "",
+) -> dict[str, Any]:
     config: dict[str, Any] = {
         "configurable": {
             "thread_id": checkpoint_saver_service.instance.get_thread_id(user_id, session_id),
-            "checkpoint_ns": "",
+            "checkpoint_ns": checkpoint_ns,
         },
         "run_name": "customer-service-agent",
         "metadata": {"turn_id": turn_id or "untracked"},
@@ -174,7 +207,7 @@ def _build_graph_config(user_id: str | None, session_id: str, turn_id: str | Non
 
 
 async def _generate_stream_events(request: ChatStreamRequest):
-    async with turn_admission.slot(request.user_id or "anonymous"):
+    async with turn_admission.slot(request.user_id or "anonymous", request.session_id):
         graph = customer_service_workflow.get_workflow()
         user_id, state, turn, replay = await asyncio.to_thread(_prepare_turn, request)
         session_id = state["session_id"]
@@ -182,32 +215,57 @@ async def _generate_stream_events(request: ChatStreamRequest):
             async for item in _generate_replay_events(turn, replay["content"]):
                 yield item
             return
-        run = await asyncio.to_thread(agent_run_service.registry.begin, session_id, turn.turn_id)
-        try:
-            if not state.get("user_message_persisted"):
-                await asyncio.to_thread(
-                    short_term_memory_service.get_service().add_message,
-                    session_id,
-                    "user",
-                    request.message,
-                    turn.turn_id,
-                )
-            await asyncio.to_thread(
-                agent_run_service.registry.record_step,
-                run,
-                "接收用户请求",
-                node_name="user_query",
-                step_type="query",
+        async with get_turn_lease_manager().hold(user_id, session_id, turn.turn_id) as lease:
+            run = await asyncio.to_thread(
+                agent_run_service.registry.begin,
+                session_id,
+                turn.turn_id,
+                user_id=user_id,
             )
-        except Exception:
-            agent_run_service.registry.finish(run, "failed")
-            raise
-        async for item in _generate_stream_events_admitted(graph, state, session_id, user_id, turn, run):
-            yield item
+            run.stop_requested = lease.stop_requested
+            try:
+                if not state.get("user_message_persisted"):
+                    await asyncio.to_thread(
+                        short_term_memory_service.get_service().add_message,
+                        session_id,
+                        "user",
+                        request.message,
+                        turn.turn_id,
+                        user_id=user_id,
+                    )
+                await asyncio.to_thread(
+                    agent_run_service.registry.record_step,
+                    run,
+                    "接收用户请求",
+                    node_name="user_query",
+                    step_type="query",
+                )
+            except Exception:
+                agent_run_service.registry.finish(run, "failed")
+                raise
+            async for item in _generate_stream_events_admitted(
+                graph,
+                state,
+                session_id,
+                user_id,
+                turn,
+                run,
+                lease=lease,
+            ):
+                yield item
 
 
-async def _generate_stream_events_admitted(graph, chat_state, session_id: str, user_id: str | None, turn, run=None):
-    run = run or agent_run_service.registry.begin(session_id, turn.turn_id)
+async def _generate_stream_events_admitted(
+    graph,
+    chat_state,
+    session_id: str,
+    user_id: str | None,
+    turn,
+    run=None,
+    *,
+    lease: TurnLease | None = None,
+):
+    run = run or agent_run_service.registry.begin(session_id, turn.turn_id, user_id=user_id)
     run.attach_current_task()
     recorder = _WorkflowRunRecorder(run)
     trace_recorder = NodeTraceRecorder(turn.turn_id)
@@ -230,7 +288,12 @@ async def _generate_stream_events_admitted(graph, chat_state, session_id: str, u
         if run.steps:
             yield _encode_sse({"type": "step_complete", "step": run.steps[0]})
         try:
-            config = _build_graph_config(user_id, session_id, turn.turn_id)
+            config = _build_graph_config(
+                user_id,
+                session_id,
+                turn.turn_id,
+                checkpoint_ns=lease.checkpoint_namespace if lease is not None else "",
+            )
             async for event in graph.astream_events(chat_state, config=config, version="v2"):
                 try:
                     trace_event = trace_recorder.consume(event)
@@ -271,6 +334,8 @@ async def _generate_stream_events_admitted(graph, chat_state, session_id: str, u
                     final_response,
                     turn.turn_id,
                     settings.memory_layered_enabled,
+                    user_id,
+                    lease,
                 )
             finalize_turn(
                 root,
@@ -322,25 +387,41 @@ async def _generate_stream_events_admitted(graph, chat_state, session_id: str, u
 
     if control_flow_error is not None:
         agent_run_service.registry.finish(run, "cancelled")
-        _clear_checkpoint(user_id, session_id)
+        _clear_checkpoint(
+            user_id,
+            session_id,
+            lease.checkpoint_namespace if lease is not None else None,
+        )
         raise control_flow_error
     for trace_error_event in trace_error_events:
         yield _encode_sse(trace_error_event)
     if stopped:
         agent_run_service.registry.finish(run, "stopped")
-        _clear_checkpoint(user_id, session_id)
+        _clear_checkpoint(
+            user_id,
+            session_id,
+            lease.checkpoint_namespace if lease is not None else None,
+        )
         yield _encode_sse({"type": "stopped", "content": "Agent 已停止", "turn_id": turn.turn_id})
         yield _encode_sse({"type": "terminal", "status": "stopped", "turn_id": turn.turn_id})
         yield "data:[DONE]\n\n"
         return
     if error_payload is not None:
         agent_run_service.registry.finish(run, "failed")
-        _clear_checkpoint(user_id, session_id)
+        _clear_checkpoint(
+            user_id,
+            session_id,
+            lease.checkpoint_namespace if lease is not None else None,
+        )
         yield _encode_sse(error_payload)
         yield _encode_sse({"type": "terminal", "status": "failed", "turn_id": turn.turn_id})
     else:
         agent_run_service.registry.finish(run, "completed")
-        _clear_checkpoint(user_id, session_id)
+        _clear_checkpoint(
+            user_id,
+            session_id,
+            lease.checkpoint_namespace if lease is not None else None,
+        )
         yield _encode_sse({"type": "terminal", "status": "completed", "turn_id": turn.turn_id})
     yield "data:[DONE]\n\n"
 

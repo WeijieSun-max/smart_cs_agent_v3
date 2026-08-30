@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from domain.customer_service_agent.orchestration.models import AgentResult
 from domain.customer_service_agent.workflow.entity.chat_state import ChatState
-from domain.shared.llm.llm_service import invoke_llm
+from domain.shared.llm.llm_service import ainvoke_llm, invoke_llm
 from pkg.llm import parse_json_object
 from pkg.telemetry import record_json_parse
 
@@ -54,6 +54,30 @@ def response_writer_node(state: ChatState) -> dict[str, Any]:
         draft = fallback
         source = "deterministic"
     # draft_source 供合规节点做风险分级：LLM 生成的内容仍需 llm_check，确定性模板可只走规则层。
+    draft_source = "llm" if (source == "llm" or _results_have_llm_content(results)) else "deterministic"
+    return {
+        "draft_response": draft,
+        "draft_source": draft_source,
+        "current_agent": "response_writer",
+        "node_logs": [f"Response draft completed: {source}"],
+    }
+
+
+async def response_writer_node_async(state: ChatState) -> dict[str, Any]:
+    """Async graph entrypoint; synchronous entrypoint remains for offline callers."""
+
+    fallback = _fallback_text(state)
+    results = _agent_results(state)
+    supervisor_response = (state.get("supervisor_response") or "").strip()
+    if _should_compose(results):
+        draft, composed = await _compose_async(results, fallback)
+        source = "llm" if composed else "fallback"
+    elif supervisor_response:
+        draft = supervisor_response
+        source = state.get("supervisor_response_source") or "llm"
+    else:
+        draft = fallback
+        source = "deterministic"
     draft_source = "llm" if (source == "llm" or _results_have_llm_content(results)) else "deterministic"
     return {
         "draft_response": draft,
@@ -116,6 +140,40 @@ def _compose(results: list[AgentResult], fallback: str) -> tuple[str, bool]:
         return fallback, False
     record_json_parse("response.compose", True)
     return decision.response, True
+
+
+async def _compose_async(results: list[AgentResult], fallback: str) -> tuple[str, bool]:
+    payload = _composition_payload(results)
+    try:
+        response = await ainvoke_llm(
+            [
+                SystemMessage(content=_RESPONSE_SYSTEM_PROMPT + _COMPOSITE_RESPONSE_PROMPT),
+                HumanMessage(content=payload[:16_000]),
+            ],
+            run_name="response.compose",
+            prompt_version="v1",
+        )
+        decision = _ResponseDecision.model_validate(parse_json_object(str(response.content)))
+    except (ValidationError, TypeError):
+        record_json_parse("response.compose", False)
+        return fallback, False
+    except Exception:
+        return fallback, False
+    record_json_parse("response.compose", True)
+    return decision.response, True
+
+
+def _composition_payload(results: list[AgentResult]) -> str:
+    return json.dumps([
+        {
+            "task_id": result.task_id,
+            "status": result.status,
+            "facts": result.facts,
+            "user_fragment": result.user_fragment,
+            "error_code": result.error_code,
+        }
+        for result in results
+    ], ensure_ascii=False, default=str)
 
 
 def _fallback_text(state: ChatState) -> str:

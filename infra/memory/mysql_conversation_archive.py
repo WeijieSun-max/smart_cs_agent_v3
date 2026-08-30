@@ -23,11 +23,14 @@ class MySQLConversationArchive(IConversationArchive):
         memory_repository: "MySQLMemoryRepository | None" = None,
     ) -> None:
         self.mysql_client = mysql_client
-        self.user_id = user_id or get_local_user_id()
+        self._default_user_id = user_id or get_local_user_id()
         self.memory_repository = memory_repository
         self._ready = False
         if mysql_client is not None:
             self._ready = self._ensure_tables()
+
+    def _scope(self, user_id: str | None) -> str:
+        return user_id or self._default_user_id
 
     @property
     def available(self) -> bool:
@@ -160,7 +163,7 @@ class MySQLConversationArchive(IConversationArchive):
                 return False
         ok, _ = self.mysql_client.execute_update(
             "UPDATE cs_sessions SET user_id = %s WHERE user_id = 'local-user'",
-            (self.user_id,),
+            (self._default_user_id,),
         )
         if not ok:
             return False
@@ -171,7 +174,15 @@ class MySQLConversationArchive(IConversationArchive):
             raise StorageUnavailableError()
         return self.mysql_client
 
-    def create_session(self, session_id: str, title: str, agent_id: str) -> dict[str, object] | None:
+    def create_session(
+        self,
+        session_id: str,
+        title: str,
+        agent_id: str,
+        *,
+        user_id: str | None = None,
+    ) -> dict[str, object] | None:
+        scope = self._scope(user_id)
         client = self._require_available()
         now = _utc_now()
         ok, _ = client.execute_update(
@@ -180,20 +191,21 @@ class MySQLConversationArchive(IConversationArchive):
                 (session_id, user_id, title, agent_id, favorite, message_count, created_at, updated_at)
             VALUES (%s, %s, %s, %s, 0, 0, %s, %s)
             """,
-            (session_id, self.user_id, title.strip() or "新会话", agent_id, now, now),
+            (session_id, scope, title.strip() or "新会话", agent_id, now, now),
         )
         if not ok:
             raise StorageOperationError()
-        return self.get_session(session_id)
+        return self.get_session(session_id, user_id=scope)
 
-    def get_session(self, session_id: str) -> dict[str, object] | None:
+    def get_session(self, session_id: str, *, user_id: str | None = None) -> dict[str, object] | None:
+        scope = self._scope(user_id)
         client = self._require_available()
         ok, row = client.execute_query(
             """
             SELECT session_id, title, agent_id, favorite, message_count, created_at, updated_at
             FROM cs_sessions WHERE session_id = %s AND user_id = %s
             """,
-            (session_id, self.user_id),
+            (session_id, scope),
             fetch_one=True,
         )
         if not ok:
@@ -207,7 +219,10 @@ class MySQLConversationArchive(IConversationArchive):
         content: str,
         timestamp: str,
         turn_id: str | None = None,
+        *,
+        user_id: str | None = None,
     ) -> bool:
+        scope = self._scope(user_id)
         client = self._require_available()
         created_at = _parse_timestamp(timestamp)
         title = _title_from_message(content)
@@ -218,7 +233,7 @@ class MySQLConversationArchive(IConversationArchive):
                     (session_id, user_id, title, agent_id, favorite, message_count, created_at, updated_at)
                 VALUES (%s, %s, %s, 'general', 0, 0, %s, %s)
                 """,
-                (session_id, self.user_id, "新会话", created_at, created_at),
+                (session_id, scope, "新会话", created_at, created_at),
             )
             inserted = cursor.execute(
                 """
@@ -237,7 +252,7 @@ class MySQLConversationArchive(IConversationArchive):
                     updated_at = %s
                 WHERE session_id = %s AND user_id = %s
                 """,
-                (role, title, created_at, session_id, self.user_id),
+                (role, title, created_at, session_id, scope),
             )
             return inserted
 
@@ -254,18 +269,35 @@ class MySQLConversationArchive(IConversationArchive):
         turn_id: str,
         *,
         enqueue_memory: bool = False,
+        user_id: str | None = None,
+        fencing_token: int | None = None,
+        lease_owner_id: str | None = None,
     ) -> bool:
+        scope = self._scope(user_id)
         client = self._require_available()
         created_at = _parse_timestamp(timestamp)
 
         def operation(cursor) -> bool:
+            if fencing_token is not None:
+                cursor.execute(
+                    """
+                    SELECT fencing_token FROM cs_turn_leases
+                    WHERE user_id = %s AND session_id = %s AND turn_id = %s
+                      AND owner_id = %s AND fencing_token = %s
+                      AND lease_until > UTC_TIMESTAMP(6) AND stop_requested = 0
+                    FOR UPDATE
+                    """,
+                    (scope, session_id, turn_id, lease_owner_id, fencing_token),
+                )
+                if cursor.fetchone() is None:
+                    raise RuntimeError("stale turn lease")
             cursor.execute(
                 """
                 INSERT IGNORE INTO cs_sessions
                     (session_id, user_id, title, agent_id, favorite, message_count, created_at, updated_at)
                 VALUES (%s, %s, '新会话', 'general', 0, 0, %s, %s)
                 """,
-                (session_id, self.user_id, created_at, created_at),
+                (session_id, scope, created_at, created_at),
             )
             inserted = cursor.execute(
                 """
@@ -281,11 +313,11 @@ class MySQLConversationArchive(IConversationArchive):
                     SET message_count = message_count + 1, updated_at = %s
                     WHERE session_id = %s AND user_id = %s
                     """,
-                    (created_at, session_id, self.user_id),
+                    (created_at, session_id, scope),
                 )
             if enqueue_memory:
                 payload = json.dumps(
-                    {"user_id": self.user_id, "session_id": session_id, "turn_id": turn_id},
+                    {"user_id": scope, "session_id": session_id, "turn_id": turn_id},
                     ensure_ascii=False,
                     separators=(",", ":"),
                     sort_keys=True,
@@ -305,7 +337,14 @@ class MySQLConversationArchive(IConversationArchive):
             raise StorageOperationError()
         return bool(result)
 
-    def get_message_by_turn(self, turn_id: str, role: str) -> dict[str, str] | None:
+    def get_message_by_turn(
+        self,
+        turn_id: str,
+        role: str,
+        *,
+        user_id: str | None = None,
+    ) -> dict[str, str] | None:
+        scope = self._scope(user_id)
         client = self._require_available()
         ok, row = client.execute_query(
             """
@@ -314,7 +353,7 @@ class MySQLConversationArchive(IConversationArchive):
             JOIN cs_sessions s ON s.session_id = m.session_id
             WHERE m.turn_id = %s AND m.role = %s AND s.user_id = %s
             """,
-            (turn_id, role, self.user_id),
+            (turn_id, role, scope),
             fetch_one=True,
         )
         if not ok:
@@ -329,7 +368,14 @@ class MySQLConversationArchive(IConversationArchive):
             "turn_id": str(row["turn_id"]),
         }
 
-    def get_history(self, session_id: str, last_n: int) -> list[dict[str, str]]:
+    def get_history(
+        self,
+        session_id: str,
+        last_n: int,
+        *,
+        user_id: str | None = None,
+    ) -> list[dict[str, str]]:
+        scope = self._scope(user_id)
         client = self._require_available()
         ok, rows = client.execute_query(
             """
@@ -340,7 +386,7 @@ class MySQLConversationArchive(IConversationArchive):
             ORDER BY message_id DESC
             LIMIT %s
             """,
-            (session_id, self.user_id, last_n),
+            (session_id, scope, last_n),
         )
         if not ok:
             record_fallback("mysql_conversation_archive")
@@ -356,7 +402,8 @@ class MySQLConversationArchive(IConversationArchive):
             for row in reversed(rows)
         ]
 
-    def list_sessions(self) -> list[dict[str, object]]:
+    def list_sessions(self, *, user_id: str | None = None) -> list[dict[str, object]]:
+        scope = self._scope(user_id)
         client = self._require_available()
         ok, rows = client.execute_query(
             """
@@ -365,7 +412,7 @@ class MySQLConversationArchive(IConversationArchive):
             WHERE user_id = %s
             ORDER BY updated_at DESC
             """,
-            (self.user_id,),
+            (scope,),
         )
         if not ok:
             record_fallback("mysql_conversation_archive")
@@ -378,7 +425,9 @@ class MySQLConversationArchive(IConversationArchive):
         *,
         title: str | None = None,
         favorite: bool | None = None,
+        user_id: str | None = None,
     ) -> dict[str, object] | None:
+        scope = self._scope(user_id)
         client = self._require_available()
         assignments: list[str] = []
         values: list[object] = []
@@ -391,22 +440,23 @@ class MySQLConversationArchive(IConversationArchive):
         if assignments:
             assignments.append("updated_at = %s")
             values.append(_utc_now())
-            values.extend([session_id, self.user_id])
+            values.extend([session_id, scope])
             ok, _ = client.execute_update(
                 f"UPDATE cs_sessions SET {', '.join(assignments)} WHERE session_id = %s AND user_id = %s",
                 tuple(values),
             )
             if not ok:
                 raise StorageOperationError()
-        return self.get_session(session_id)
+        return self.get_session(session_id, user_id=scope)
 
-    def delete_session(self, session_id: str) -> bool:
+    def delete_session(self, session_id: str, *, user_id: str | None = None) -> bool:
+        scope = self._scope(user_id)
         client = self._require_available()
         memory_repository = getattr(self, "memory_repository", None)
         if memory_repository is None:
             ok, affected = client.execute_update(
                 "DELETE FROM cs_sessions WHERE session_id = %s AND user_id = %s",
-                (session_id, self.user_id),
+                (session_id, scope),
             )
             if not ok:
                 raise StorageOperationError()
@@ -415,18 +465,18 @@ class MySQLConversationArchive(IConversationArchive):
         def operation(cursor) -> bool:
             cursor.execute(
                 "SELECT session_id FROM cs_sessions WHERE session_id = %s AND user_id = %s FOR UPDATE",
-                (session_id, self.user_id),
+                (session_id, scope),
             )
             if cursor.fetchone() is None:
                 return False
             memory_repository.delete_session_sources_in_transaction(
                 cursor,
-                self.user_id,
+                scope,
                 session_id,
             )
             cursor.execute(
                 "DELETE FROM cs_sessions WHERE session_id = %s AND user_id = %s",
-                (session_id, self.user_id),
+                (session_id, scope),
             )
             return True
 
@@ -435,7 +485,15 @@ class MySQLConversationArchive(IConversationArchive):
             raise StorageOperationError()
         return bool(affected)
 
-    def start_run(self, session_id: str, turn_id: str, started_at: str) -> None:
+    def start_run(
+        self,
+        session_id: str,
+        turn_id: str,
+        started_at: str,
+        *,
+        user_id: str | None = None,
+    ) -> None:
+        scope = self._scope(user_id)
         client = self._require_available()
         timestamp = _parse_timestamp(started_at)
         ok, _ = client.execute_transaction([
@@ -445,7 +503,7 @@ class MySQLConversationArchive(IConversationArchive):
                     (session_id, user_id, title, agent_id, favorite, message_count, created_at, updated_at)
                 VALUES (%s, %s, '新会话', 'general', 0, 0, %s, %s)
                 """,
-                (session_id, self.user_id, timestamp, timestamp),
+                (session_id, scope, timestamp, timestamp),
             ),
             (
                 """
@@ -511,7 +569,14 @@ class MySQLConversationArchive(IConversationArchive):
         if not ok:
             raise StorageOperationError()
 
-    def list_runs(self, session_id: str, limit: int = 50) -> list[dict[str, Any]]:
+    def list_runs(
+        self,
+        session_id: str,
+        limit: int = 50,
+        *,
+        user_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        scope = self._scope(user_id)
         client = self._require_available()
         ok, runs = client.execute_query(
             """
@@ -522,7 +587,7 @@ class MySQLConversationArchive(IConversationArchive):
             ORDER BY started_at DESC
             LIMIT %s
             """,
-            (session_id, self.user_id, limit),
+            (session_id, scope, limit),
         )
         if not ok:
             raise StorageOperationError()

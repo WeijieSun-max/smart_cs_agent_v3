@@ -9,7 +9,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field, StrictBool, ValidationError
 
 from domain.customer_service_agent.workflow.entity.chat_state import ChatState
-from domain.shared.llm.llm_service import invoke_llm
+from domain.shared.llm.llm_service import ainvoke_llm, invoke_llm
 from pkg.llm import parse_json_object
 from pkg.telemetry import record_json_parse
 
@@ -59,6 +59,17 @@ def compliance_checker_node(state: ChatState) -> dict:
     return _compliance_state_update(state, result)
 
 
+async def compliance_checker_node_async(state: ChatState) -> dict:
+    """Async graph entrypoint using the provider's native async transport."""
+
+    content = _content_from_state(state)
+    if state.get("draft_source", "deterministic") == "llm":
+        result = await full_check_async(content)
+    else:
+        result = rule_check(content)
+    return _compliance_state_update(state, result)
+
+
 def full_check(content: str) -> ComplianceResult:
     """先执行规则否决，高风险时短路，否则合并 LLM 结论。"""
 
@@ -84,6 +95,37 @@ def llm_check(content: str) -> ComplianceResult:
     """请求独立合规模型审查；非法或缺失 JSON 一律阻断。"""
 
     response = invoke_llm([
+        SystemMessage(content=COMPLIANCE_SYSTEM_PROMPT),
+        HumanMessage(content=f"请审查以下客服回复内容：\n\n{content}"),
+    ], run_name="compliance.review")
+    parsed = parse_json_object(str(response.content))
+    if parsed is None:
+        record_json_parse("compliance.review", False)
+        return _blocked_parse_failure(content)
+    try:
+        decision = ComplianceDecision.model_validate(parsed)
+    except ValidationError:
+        record_json_parse("compliance.review", False)
+        return _blocked_parse_failure(content)
+    record_json_parse("compliance.review", True)
+    return ComplianceResult(
+        passed=decision.passed,
+        risk_level=decision.risk_level,
+        violations=decision.violations,
+        suggestions=decision.suggestions,
+        sanitized_content=content,
+    )
+
+
+async def full_check_async(content: str) -> ComplianceResult:
+    rule_result = rule_check(content)
+    if not rule_result.passed and rule_result.risk_level in {"high", "critical"}:
+        return rule_result
+    return _merge_compliance_results(rule_result, await llm_check_async(content))
+
+
+async def llm_check_async(content: str) -> ComplianceResult:
+    response = await ainvoke_llm([
         SystemMessage(content=COMPLIANCE_SYSTEM_PROMPT),
         HumanMessage(content=f"请审查以下客服回复内容：\n\n{content}"),
     ], run_name="compliance.review")

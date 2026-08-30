@@ -51,8 +51,16 @@ def prepare_turn(request: ChatRequest | ChatStreamRequest, dependencies: TurnCon
     dependencies.session_ownership().bind(user_id, session_id)
     turn = create_turn_trace(user_id, session_id, request.request_id)
     memory = dependencies.short_term_memory()
-    replay = memory.get_message_by_turn(turn.turn_id, "assistant") if request.request_id else None
-    existing_user = memory.get_message_by_turn(turn.turn_id, "user") if request.request_id else None
+    replay = (
+        memory.get_message_by_turn(turn.turn_id, "assistant", user_id=user_id)
+        if request.request_id
+        else None
+    )
+    existing_user = (
+        memory.get_message_by_turn(turn.turn_id, "user", user_id=user_id)
+        if request.request_id
+        else None
+    )
     for persisted in (replay, existing_user):
         persisted_session_id = persisted.get("session_id") if persisted is not None else None
         if persisted_session_id is not None and persisted_session_id != session_id:
@@ -78,6 +86,7 @@ def prepare_turn(request: ChatRequest | ChatStreamRequest, dependencies: TurnCon
                 memory,
                 session_id,
                 turn.turn_id,
+                user_id=user_id,
                 max_tokens=settings.memory_recent_messages_tokens,
             )
     state = create_chat_state(
@@ -126,9 +135,10 @@ def conversation_context_for_turn(
     session_id: str,
     current_turn_id: str,
     *,
+    user_id: str,
     max_tokens: int = 700,
 ) -> dict[str, Any]:
-    history = memory.get_history(session_id)
+    history = memory.get_history(session_id, user_id=user_id)
     messages: list[ConversationMemoryMessage] = []
     for message in history:
         if message.get("turn_id") == current_turn_id:
@@ -156,24 +166,36 @@ def persist_assistant_turn(
     content: str,
     turn_id: str,
     enqueue_memory: bool,
+    user_id: str,
+    lease=None,
 ) -> None:
     complete_turn = getattr(memory, "complete_turn", None)
     if callable(complete_turn):
+        kwargs = {
+            "enqueue_memory": enqueue_memory,
+            "user_id": user_id,
+        }
+        if lease is not None and lease.fencing_token > 0:
+            kwargs.update(
+                fencing_token=lease.fencing_token,
+                lease_owner_id=lease.owner_id,
+            )
         complete_turn(
             session_id,
             content,
             turn_id,
-            enqueue_memory=enqueue_memory,
+            **kwargs,
         )
         return
-    memory.add_message(session_id, "assistant", content, turn_id)
+    memory.add_message(session_id, "assistant", content, turn_id, user_id=user_id)
 
 
 def clear_checkpoint(
     user_id: str | None,
     session_id: str,
+    checkpoint_ns: str | None = None,
     dependencies: TurnContextDependencies = DEFAULT_DEPENDENCIES,
 ) -> None:
     service = dependencies.checkpoint_service()
     if service is not None:
-        service.clear_thread(user_id, session_id)
+        service.clear_thread(user_id, session_id, checkpoint_ns=checkpoint_ns)

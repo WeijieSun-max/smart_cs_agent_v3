@@ -44,8 +44,13 @@ def get_history(
     user_id: str | None = Query(default=None, min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._-]+$"),
     limit: int = Query(default=100, ge=1, le=500),
 ):
-    get_session_ownership().require_owner(user_id or get_local_user_id(), session_id)
-    messages = short_term_memory_service.get_service().get_history(session_id, last_n=limit)
+    resolved_user_id = user_id or get_local_user_id()
+    get_session_ownership().require_owner(resolved_user_id, session_id)
+    messages = short_term_memory_service.get_service().get_history(
+        session_id,
+        last_n=limit,
+        user_id=resolved_user_id,
+    )
     return {
         "session_id": session_id,
         "messages": [

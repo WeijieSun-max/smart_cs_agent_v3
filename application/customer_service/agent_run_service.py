@@ -21,6 +21,7 @@ RunStatus = Literal["running", "completed", "failed", "stopped", "cancelled"]
 class AgentRun:
     session_id: str
     turn_id: str
+    user_id: str | None = None
     started_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     completed_at: str | None = None
     status: RunStatus = "running"
@@ -57,16 +58,30 @@ class AgentRunRegistry:
         self._lock = threading.RLock()
         self._ttl_seconds = get_settings().agent_state_ttl_seconds
 
-    def begin(self, session_id: str, turn_id: str) -> AgentRun:
+    def begin(self, session_id: str, turn_id: str, *, user_id: str | None = None) -> AgentRun:
         with self._lock:
             self._cleanup_locked()
             current = self._runs.get(session_id)
             if current is not None and current.status == "running":
                 raise RuntimeError(f"Session {session_id} already has a running agent")
-            run = AgentRun(session_id=session_id, turn_id=turn_id)
+            run = AgentRun(session_id=session_id, turn_id=turn_id, user_id=user_id)
             self._runs[session_id] = run
         try:
-            self._persist(lambda archive: archive.start_run(session_id, turn_id, run.started_at), strict=True)
+            def persist_start(archive) -> None:
+                if user_id is None:
+                    archive.start_run(session_id, turn_id, run.started_at)
+                else:
+                    archive.start_run(
+                        session_id,
+                        turn_id,
+                        run.started_at,
+                        user_id=user_id,
+                    )
+
+            self._persist(
+                persist_start,
+                strict=True,
+            )
         except Exception:
             with self._lock:
                 if self._runs.get(session_id) is run:

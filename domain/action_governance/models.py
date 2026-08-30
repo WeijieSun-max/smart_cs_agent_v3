@@ -29,7 +29,7 @@ class ActionEnvelope(BaseModel):
     skill_name: str | None = None
     skill_version: str | None = None
     arguments: dict[str, Any]
-    arguments_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    arguments_digest: str = Field(pattern=r"^[0-9a-f]{64}$")    # 将调用参数、工具版本和 Skill 版本绑定在一起
     impact_summary: str
 
     # 生命周期及幂等控制。indeterminate 表示调用超时后副作用是否发生仍未知。

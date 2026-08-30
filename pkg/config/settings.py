@@ -29,6 +29,13 @@ class Settings(BaseSettings):
         pattern=r"^[A-Za-z0-9._-]+$",
     )
     chat_message_max_length: int = Field(8000, alias="CHAT_MESSAGE_MAX_LENGTH", ge=1, le=100_000)
+    turn_max_concurrency: int = Field(8, alias="TURN_MAX_CONCURRENCY", ge=1, le=200)
+    turn_queue_capacity: int = Field(32, alias="TURN_QUEUE_CAPACITY", ge=0, le=1000)
+    turn_queue_timeout_seconds: float = Field(5.0, alias="TURN_QUEUE_TIMEOUT_SECONDS", ge=0.1, le=120)
+    per_session_queue_limit: int = Field(2, alias="PER_SESSION_QUEUE_LIMIT", ge=1, le=20)
+    turn_distributed_lease_enabled: bool = Field(True, alias="TURN_DISTRIBUTED_LEASE_ENABLED")
+    turn_lease_seconds: int = Field(30, alias="TURN_LEASE_SECONDS", ge=5, le=3600)
+    turn_lease_heartbeat_seconds: float = Field(5.0, alias="TURN_LEASE_HEARTBEAT_SECONDS", ge=0.5, le=300)
 
     qwen_api_key: str = Field("", alias="QWEN_API_KEY", repr=False)
     qwen_base_url: str = Field(
@@ -150,8 +157,6 @@ class Settings(BaseSettings):
     skill_files_enabled: bool = Field(True, alias="SKILL_FILES_ENABLED")
     identity_header_enabled: bool = Field(False, alias="IDENTITY_HEADER_ENABLED")
     trusted_proxy_networks: str = Field("127.0.0.1/32,::1/128", alias="TRUSTED_PROXY_NETWORKS")
-    session_lock_timeout_seconds: float = Field(15.0, alias="SESSION_LOCK_TIMEOUT_SECONDS", ge=0.1, le=120)
-    per_user_queue_limit: int = Field(2, alias="PER_USER_QUEUE_LIMIT", ge=1, le=20)
     memory_summary_eligible_turns: int = Field(20, alias="MEMORY_SUMMARY_ELIGIBLE_TURNS", ge=2, le=1000)
     memory_summary_increment_turns: int = Field(8, alias="MEMORY_SUMMARY_INCREMENT_TURNS", ge=1, le=100)
     action_reconcile_worker_enabled: bool = Field(False, alias="ACTION_RECONCILE_WORKER_ENABLED")
@@ -199,6 +204,8 @@ class Settings(BaseSettings):
         )
         if layer_budget > self.memory_context_max_tokens:
             raise ValueError("memory layer budgets cannot exceed MEMORY_CONTEXT_MAX_TOKENS")
+        if self.turn_lease_heartbeat_seconds * 2 >= self.turn_lease_seconds:
+            raise ValueError("TURN_LEASE_HEARTBEAT_SECONDS must be less than half TURN_LEASE_SECONDS")
         if self.knowledge_embedding_mode not in {"external", "qdrant"}:
             raise ValueError("KNOWLEDGE_EMBEDDING_MODE must be external or qdrant")
         if self.knowledge_retrieval_mode not in {"dense", "sparse", "hybrid"}:

@@ -82,7 +82,7 @@ def test_current_user_setting_is_validated_and_applied(monkeypatch) -> None:
         assert updated.status_code == 200
         assert updated.json() == {"user_id": "customer_2026"}
         assert get_local_user_id() == "customer_2026"
-        assert short_term_memory_service.get_service().memory.user_id == "customer_2026"
+        assert not hasattr(short_term_memory_service.get_service().memory, "user_id")
 
         invalid = client.put("/api/settings/current-user", json={"user_id": "invalid user"})
         assert invalid.status_code == 422

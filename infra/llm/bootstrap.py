@@ -58,6 +58,7 @@ def initialize_llm() -> None:
         clients,
         run_prefixes=run_prefixes,
         max_concurrency=settings.llm_max_concurrency,
+        queue_capacity=settings.llm_queue_capacity,
         queue_timeout_seconds=settings.llm_queue_timeout_seconds,
     )
     resolved = {

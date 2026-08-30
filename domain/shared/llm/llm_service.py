@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import threading
 import time
 from dataclasses import dataclass
@@ -18,6 +19,8 @@ _slot_lock = threading.Lock()
 _slots: threading.BoundedSemaphore | None = None
 _slot_limit = 0
 _queue_timeout_seconds = 15.0
+_queue_capacity = 40
+_queued_calls = 0
 
 
 @dataclass(frozen=True)
@@ -47,6 +50,7 @@ def initialize_llm_profiles(
     *,
     run_prefixes: Mapping[str, str],
     max_concurrency: int = 20,
+    queue_capacity: int = 40,
     queue_timeout_seconds: float = 15.0,
 ) -> None:
     """安装运行期间不可变的节点模型 profile 注册表。
@@ -58,7 +62,10 @@ def initialize_llm_profiles(
         raise ValueError("model profile registry requires a default client")
     if max_concurrency < 1:
         raise ValueError("max_concurrency must be positive")
-    global instance, _profiles, _profile_by_run_prefix, _slots, _slot_limit, _queue_timeout_seconds
+    if queue_capacity < 0:
+        raise ValueError("queue_capacity cannot be negative")
+    global instance, _profiles, _profile_by_run_prefix, _slots, _slot_limit
+    global _queue_timeout_seconds, _queue_capacity, _queued_calls
     instance = clients["default"]
     _profiles = dict(clients)
     unknown = set(run_prefixes.values()) - set(_profiles)
@@ -67,6 +74,8 @@ def initialize_llm_profiles(
     _profile_by_run_prefix = dict(run_prefixes)
     _slots = threading.BoundedSemaphore(max_concurrency)
     _slot_limit = max_concurrency
+    _queue_capacity = queue_capacity
+    _queued_calls = 0
     _queue_timeout_seconds = float(queue_timeout_seconds)
 
 
@@ -91,14 +100,63 @@ def _acquire_slot() -> threading.BoundedSemaphore | None:
 
     semaphore = _slots
     if semaphore is not None:
-        started=time.perf_counter(); llm_queue_depth.inc()
+        if semaphore.acquire(blocking=False):
+            llm_inflight.inc()
+            return semaphore
+        _reserve_queue_slot()
+        started = time.perf_counter()
+        llm_queue_depth.inc()
         try:
             if not semaphore.acquire(timeout=_queue_timeout_seconds):
                 raise RuntimeError("LLM admission queue timeout")
         finally:
-            llm_queue_depth.dec(); llm_queue_wait_seconds.observe(time.perf_counter()-started)
+            _release_queue_slot()
+            llm_queue_depth.dec()
+            llm_queue_wait_seconds.observe(time.perf_counter() - started)
         llm_inflight.inc()
     return semaphore
+
+
+async def _acquire_slot_async() -> threading.BoundedSemaphore | None:
+    """Acquire the shared thread-safe limiter without blocking the event loop."""
+
+    semaphore = _slots
+    if semaphore is None:
+        return None
+    if semaphore.acquire(blocking=False):
+        llm_inflight.inc()
+        return semaphore
+    _reserve_queue_slot()
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    deadline = started + _queue_timeout_seconds
+    llm_queue_depth.inc()
+    try:
+        while not semaphore.acquire(blocking=False):
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                raise RuntimeError("LLM admission queue timeout")
+            await asyncio.sleep(min(0.01, remaining))
+    finally:
+        _release_queue_slot()
+        llm_queue_depth.dec()
+        llm_queue_wait_seconds.observe(loop.time() - started)
+    llm_inflight.inc()
+    return semaphore
+
+
+def _reserve_queue_slot() -> None:
+    global _queued_calls
+    with _slot_lock:
+        if _queued_calls >= _queue_capacity:
+            raise RuntimeError("LLM admission queue is full")
+        _queued_calls += 1
+
+
+def _release_queue_slot() -> None:
+    global _queued_calls
+    with _slot_lock:
+        _queued_calls -= 1
 
 
 def invoke_llm(
@@ -111,6 +169,33 @@ def invoke_llm(
     semaphore = _acquire_slot()
     try:
         return get_llm_client(run_name=run_name).invoke(
+            messages,
+            config={
+                "run_name": run_name,
+                "metadata": {
+                    "prompt_name": run_name,
+                    "prompt_version": prompt_version,
+                    "model_profile": _profile_for_run(run_name),
+                },
+            },
+        )
+    finally:
+        if semaphore is not None:
+            llm_inflight.dec()
+            semaphore.release()
+
+
+async def ainvoke_llm(
+    messages: Sequence[BaseMessage],
+    *,
+    run_name: str,
+    prompt_version: str = "v1",
+) -> Any:
+    """Asynchronously invoke a model under the same global limiter as sync jobs."""
+
+    semaphore = await _acquire_slot_async()
+    try:
+        return await get_llm_client(run_name=run_name).ainvoke(
             messages,
             config={
                 "run_name": run_name,

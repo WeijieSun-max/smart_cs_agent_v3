@@ -83,7 +83,14 @@ def test_requested_empty_session_ids_are_not_reused() -> None:
 def test_frontend_user_is_request_identity_and_retry_context_excludes_current_turn() -> None:
     memory = RedisShortTermMemory(None)
     short_term_memory_service.initialize_service(memory)
-    memory.add_message_at("session-1", "user", "same request", "2026-08-09T00:00:00+00:00", turn_id="request-12345678")
+    memory.add_message_at(
+        "session-1",
+        "user",
+        "same request",
+        "2026-08-09T00:00:00+00:00",
+        turn_id="request-12345678",
+        user_id="attacker",
+    )
     request = ChatRequest(
         message="same request",
         user_id="attacker",
@@ -347,7 +354,7 @@ def test_agent_run_listing_batches_step_query() -> None:
     client = QueryCountingClient()
     archive = MySQLConversationArchive.__new__(MySQLConversationArchive)
     archive.mysql_client = client
-    archive.user_id = "local-user"
+    archive._default_user_id = "local-user"
     archive._ready = True
 
     runs = archive.list_runs("session-1", limit=100)

@@ -16,7 +16,7 @@ class AdmissionProbe:
         self.released = False
 
     @asynccontextmanager
-    async def slot(self, _user_id: str):
+    async def slot(self, _user_id: str, _session_id: str | None = None):
         assert self.active is False
         self.active = True
         try:

@@ -13,10 +13,21 @@ class ShortTermMemoryService:
     def __init__(self, memory: IShortTermMemory):
         self.memory = memory
 
-    def add_message(self, session_id: str, role: str, content: str, turn_id: str | None = None) -> None:
+    def add_message(
+        self,
+        session_id: str,
+        role: str,
+        content: str,
+        turn_id: str | None = None,
+        *,
+        user_id: str | None = None,
+    ) -> None:
         """追加近期消息。"""
 
-        self.memory.add_message(session_id, role, content, turn_id=turn_id)
+        if user_id is None:
+            self.memory.add_message(session_id, role, content, turn_id=turn_id)
+        else:
+            self.memory.add_message(session_id, role, content, turn_id=turn_id, user_id=user_id)
 
     def complete_turn(
         self,
@@ -25,45 +36,79 @@ class ShortTermMemoryService:
         turn_id: str,
         *,
         enqueue_memory: bool = False,
+        user_id: str | None = None,
+        fencing_token: int | None = None,
+        lease_owner_id: str | None = None,
     ) -> None:
         """完成助手轮次，并按配置请求创建长期记忆事件。"""
 
-        self.memory.complete_turn(
-            session_id,
-            content,
-            turn_id,
-            enqueue_memory=enqueue_memory,
-        )
+        kwargs = {"enqueue_memory": enqueue_memory}
+        if user_id is not None:
+            kwargs["user_id"] = user_id
+        if fencing_token is not None:
+            kwargs["fencing_token"] = fencing_token
+            kwargs["lease_owner_id"] = lease_owner_id
+        self.memory.complete_turn(session_id, content, turn_id, **kwargs)
 
-    def get_message_by_turn(self, turn_id: str, role: str) -> dict[str, str] | None:
+    def get_message_by_turn(
+        self,
+        turn_id: str,
+        role: str,
+        *,
+        user_id: str | None = None,
+    ) -> dict[str, str] | None:
         """读取用于幂等重放的轮次消息。"""
 
-        return self.memory.get_message_by_turn(turn_id, role)
+        if user_id is None:
+            return self.memory.get_message_by_turn(turn_id, role)
+        return self.memory.get_message_by_turn(turn_id, role, user_id=user_id)
 
-    def get_history(self, session_id: str, last_n: int | None = None) -> list[dict[str, str]]:
+    def get_history(
+        self,
+        session_id: str,
+        last_n: int | None = None,
+        *,
+        user_id: str | None = None,
+    ) -> list[dict[str, str]]:
         """返回会话近期历史。"""
 
-        return self.memory.get_history(session_id, last_n=last_n)
+        if user_id is None:
+            return self.memory.get_history(session_id, last_n=last_n)
+        return self.memory.get_history(session_id, last_n=last_n, user_id=user_id)
 
-    def get_context_window(self, session_id: str, max_chars: int = 4000) -> str:
+    def get_context_window(
+        self,
+        session_id: str,
+        max_chars: int = 4000,
+        *,
+        user_id: str | None = None,
+    ) -> str:
         """返回字符预算内的纯文本上下文。"""
 
-        return self.memory.get_context_window(session_id, max_chars=max_chars)
+        if user_id is None:
+            return self.memory.get_context_window(session_id, max_chars=max_chars)
+        return self.memory.get_context_window(session_id, max_chars=max_chars, user_id=user_id)
 
     def create_session(
         self,
         session_id: str,
         title: str = "新会话",
         agent_id: str = "general",
+        *,
+        user_id: str | None = None,
     ) -> dict[str, object]:
         """创建或取得会话。"""
 
-        return self.memory.create_session(session_id, title=title, agent_id=agent_id)
+        if user_id is None:
+            return self.memory.create_session(session_id, title=title, agent_id=agent_id)
+        return self.memory.create_session(session_id, title=title, agent_id=agent_id, user_id=user_id)
 
-    def list_sessions(self) -> list[dict[str, object]]:
+    def list_sessions(self, *, user_id: str | None = None) -> list[dict[str, object]]:
         """列出当前作用域会话。"""
 
-        return self.memory.list_sessions()
+        if user_id is None:
+            return self.memory.list_sessions()
+        return self.memory.list_sessions(user_id=user_id)
 
     def update_session(
         self,
@@ -71,15 +116,21 @@ class ShortTermMemoryService:
         *,
         title: str | None = None,
         favorite: bool | None = None,
+        user_id: str | None = None,
     ) -> dict[str, object] | None:
         """更新会话标题或收藏状态。"""
 
-        return self.memory.update_session(session_id, title=title, favorite=favorite)
+        kwargs = {"title": title, "favorite": favorite}
+        if user_id is not None:
+            kwargs["user_id"] = user_id
+        return self.memory.update_session(session_id, **kwargs)
 
-    def delete_session(self, session_id: str) -> bool:
+    def delete_session(self, session_id: str, *, user_id: str | None = None) -> bool:
         """删除会话热状态。"""
 
-        return self.memory.delete_session(session_id)
+        if user_id is None:
+            return self.memory.delete_session(session_id)
+        return self.memory.delete_session(session_id, user_id=user_id)
 
 
 instance: Optional[ShortTermMemoryService] = None

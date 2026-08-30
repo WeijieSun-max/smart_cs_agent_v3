@@ -10,6 +10,7 @@ from pkg.log.logger import get_logger
 from pkg.config.settings import get_settings
 from infra.db.migrations import apply_migrations
 from application.customer_service.session_ownership import initialize_session_ownership
+from application.customer_service.turn_lease_service import initialize_turn_lease_manager
 
 logger = get_logger()
 
@@ -18,6 +19,7 @@ def initialize_customer_service_dependencies() -> None:
     mysql_client.initialize_mysql_client()
     apply_migrations(mysql_client.get_mysql_client(), get_settings().root_dir / "migrations")
     initialize_session_ownership(mysql_client.get_mysql_client())
+    initialize_turn_lease_manager(mysql_client.get_mysql_client())
 
     business = initialize_business_service(MySQLBusinessStore(mysql_client.get_mysql_client()))
     initialize_action_service(

@@ -6,7 +6,6 @@ from pathlib import Path
 from threading import RLock
 from typing import Any
 
-from domain.customer_service_agent.service import conversation_archive_service, short_term_memory_service
 from domain.customer_service_agent.tools.tool_registry import get_mcp_server
 from pkg.config.settings import ENV_FILE, get_settings
 from pkg.security import get_local_user_id, set_local_user_id
@@ -50,7 +49,6 @@ def get_current_user() -> dict[str, str]:
 def update_current_user(user_id: str) -> dict[str, str]:
     with _user_settings_lock:
         _persist_local_user_id(user_id)
-        _retarget_user_scoped_services(user_id)
         set_local_user_id(user_id)
     return {"user_id": user_id}
 
@@ -72,26 +70,6 @@ def _persist_local_user_id(user_id: str) -> None:
     temporary = ENV_FILE.with_suffix(ENV_FILE.suffix + ".tmp")
     temporary.write_text("\n".join(updated) + "\n", encoding="utf-8")
     os.replace(temporary, ENV_FILE)
-
-
-def _retarget_user_scoped_services(user_id: str) -> None:
-    targets: list[object] = []
-    try:
-        memory = short_term_memory_service.get_service().memory
-        targets.extend([memory, getattr(memory, "cache", None), getattr(memory, "archive", None)])
-    except RuntimeError:
-        pass
-    archive = conversation_archive_service.get_service_or_none()
-    if archive is not None:
-        targets.append(archive)
-    for target in targets:
-        if target is None:
-            continue
-        switch_user = getattr(target, "switch_user", None)
-        if callable(switch_user):
-            switch_user(user_id)
-        elif hasattr(target, "user_id"):
-            target.user_id = user_id
 
 
 def list_agents() -> list[dict[str, Any]]:

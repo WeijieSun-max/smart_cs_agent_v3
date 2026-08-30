@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from inspect import Parameter, signature
 from time import perf_counter
 from datetime import datetime, timezone
 from difflib import SequenceMatcher
@@ -109,7 +110,7 @@ class MemoryOrchestrator:
         get_cached = getattr(self.short_term_memory, "get_session_summary", None)
         if callable(get_cached):
             try:
-                cached = get_cached(session_id)
+                cached = _call_user_scoped(get_cached, session_id, user_id=user_id)
                 if cached:
                     parsed = SessionSummary.model_validate(cached)
                     if parsed.user_id == user_id and parsed.session_id == session_id:
@@ -126,7 +127,12 @@ class MemoryOrchestrator:
         cache_summary = getattr(self.short_term_memory, "cache_session_summary", None)
         if callable(cache_summary):
             try:
-                cache_summary(session_id, summary.model_dump(mode="json"))
+                _call_user_scoped(
+                    cache_summary,
+                    session_id,
+                    summary.model_dump(mode="json"),
+                    user_id=user_id,
+                )
             except Exception as exc:
                 logger.warning("Memory summary cache write degraded error_type={}", type(exc).__name__)
         return summary.summary_text
@@ -140,7 +146,11 @@ class MemoryOrchestrator:
         """读取近期消息，排除当前轮并过滤非法角色、空内容和畸形时间。"""
 
         try:
-            history = self.short_term_memory.get_history(session_id)
+            history = _call_user_scoped(
+                self.short_term_memory.get_history,
+                session_id,
+                user_id=user_id,
+            )
         except Exception as exc:
             logger.warning("Recent memory read degraded error_type={}", type(exc).__name__)
             try:
@@ -289,6 +299,22 @@ def _parse_timestamp(value) -> datetime | None:
         except ValueError:
             return None
     return None
+
+
+def _call_user_scoped(method, *args, user_id: str):
+    """Pass the tenant scope when supported, while retaining adapter compatibility."""
+
+    try:
+        parameters = signature(method).parameters.values()
+    except (TypeError, ValueError):
+        return method(*args, user_id=user_id)
+    supports_scope = any(
+        parameter.name == "user_id" or parameter.kind == Parameter.VAR_KEYWORD
+        for parameter in parameters
+    )
+    if supports_scope:
+        return method(*args, user_id=user_id)
+    return method(*args)
 
 
 def _normalize_content(value: str) -> str:

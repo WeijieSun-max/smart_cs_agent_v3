@@ -9,10 +9,10 @@ from langgraph.graph import END, StateGraph
 from langchain_core.runnables import RunnableLambda
 
 from domain.customer_service_agent.workflow.entity.chat_state import ChatState
-from domain.customer_service_agent.workflow.nodes.compliance_checker_node import compliance_checker_node
+from domain.customer_service_agent.workflow.nodes.compliance_checker_node import compliance_checker_node, compliance_checker_node_async
 from domain.customer_service_agent.workflow.nodes.history_fusion_node import history_fusion_node
 from domain.customer_service_agent.workflow.nodes.response_synthesizer_node import response_synthesizer_node
-from domain.customer_service_agent.workflow.nodes.response_writer_node import response_writer_node
+from domain.customer_service_agent.workflow.nodes.response_writer_node import response_writer_node, response_writer_node_async
 from domain.customer_service_agent.workflow.nodes.supervisor_graph_nodes import (
     domain_dispatch_node,
     domain_dispatch_node_sync,
@@ -69,8 +69,8 @@ def _build_customer_service_workflow() -> Any:
     workflow.add_node("supervisor_manager_node",RunnableLambda(supervisor_manager_node_sync,afunc=supervisor_manager_node))
     workflow.add_node("domain_dispatch_node",RunnableLambda(domain_dispatch_node_sync,afunc=domain_dispatch_node))
     workflow.add_node("pending_action_execution_node",RunnableLambda(pending_action_execution_node_sync,afunc=pending_action_execution_node))
-    workflow.add_node("response_writer_node",response_writer_node)
-    workflow.add_node("compliance_checker_node",compliance_checker_node)
+    workflow.add_node("response_writer_node",RunnableLambda(response_writer_node,afunc=response_writer_node_async))
+    workflow.add_node("compliance_checker_node",RunnableLambda(compliance_checker_node,afunc=compliance_checker_node_async))
     workflow.add_node("response_synthesizer_node",response_synthesizer_node)
     workflow.add_edge(START,"history_fusion_node")
     workflow.add_edge("history_fusion_node","supervisor_manager_node")

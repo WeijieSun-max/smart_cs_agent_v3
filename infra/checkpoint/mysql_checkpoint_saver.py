@@ -71,6 +71,13 @@ class MySQLCheckpointSaver(BaseCheckpointSaver):
         ok,_=self.client.execute_transaction([("DELETE FROM cs_checkpoint_writes WHERE thread_id=%s",(thread_id,)),("DELETE FROM cs_durable_checkpoints WHERE thread_id=%s",(thread_id,))])
         if not ok: raise StorageOperationError()
 
+    def delete_thread_namespace(self, thread_id: str, checkpoint_ns: str) -> None:
+        ok,_=self.client.execute_transaction([
+            ("DELETE FROM cs_checkpoint_writes WHERE thread_id=%s AND checkpoint_ns=%s",(thread_id,checkpoint_ns)),
+            ("DELETE FROM cs_durable_checkpoints WHERE thread_id=%s AND checkpoint_ns=%s",(thread_id,checkpoint_ns)),
+        ])
+        if not ok: raise StorageOperationError()
+
     async def aget_tuple(self, config: RunnableConfig) -> CheckpointTuple | None: return await asyncio.to_thread(self.get_tuple,config)
     async def alist(self, config: RunnableConfig | None, *, filter: dict[str,Any] | None=None, before: RunnableConfig | None=None, limit: int | None=None) -> AsyncIterator[CheckpointTuple]:
         items=await asyncio.to_thread(lambda:list(self.list(config,filter=filter,before=before,limit=limit)))
