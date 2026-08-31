@@ -93,42 +93,48 @@ def _client(repository: FakeRepository) -> TestClient:
     return TestClient(app)
 
 
-def test_list_memories_supports_filters_and_cursor_without_accepting_user_identity() -> None:
+def test_list_memories_supports_explicit_user_and_local_fallback() -> None:
     repository = FakeRepository()
+    repository.items.append(_item(user_id="request-user"))
     client = _client(repository)
 
     response = client.get(
         "/api/memories",
-        params={"type": "preference", "status": "active", "limit": 1, "user_id": "attacker"},
+        params={"type": "preference", "status": "active", "limit": 1, "user_id": "request-user"},
     )
 
     assert response.status_code == 200
     assert len(response.json()["items"]) == 1
-    assert repository.last_user_id == get_local_user_id()
+    assert repository.last_user_id == "request-user"
     assert repository.last_filters == (MemoryType.PREFERENCE, MemoryStatus.ACTIVE, None, 1)
 
+    fallback = client.get("/api/memories", params={"type": "preference"})
+    assert fallback.status_code == 200
+    assert repository.last_user_id == get_local_user_id()
 
-def test_correction_creates_a_new_version_and_rejects_spoofed_user_in_body() -> None:
+
+def test_correction_uses_request_user_and_enforces_memory_ownership() -> None:
     repository = FakeRepository()
+    request_item = _item(user_id="request-user")
+    repository.items.append(request_item)
     client = _client(repository)
-    old = repository.items[0]
 
-    spoofed = client.patch(
-        f"/api/memories/{old.memory_id}",
-        json={"content": "改为电话联系", "user_id": "attacker"},
+    other_user = client.patch(
+        f"/api/memories/{request_item.memory_id}",
+        json={"user_id": "other-user", "content": "改为电话联系"},
     )
     corrected = client.patch(
-        f"/api/memories/{old.memory_id}",
-        json={"content": "改为电话联系", "reason": "用户明确纠正"},
+        f"/api/memories/{request_item.memory_id}",
+        json={"user_id": "request-user", "content": "改为电话联系", "reason": "用户明确纠正"},
     )
 
-    assert spoofed.status_code == 422
+    assert other_user.status_code == 404
     assert corrected.status_code == 200
     payload = corrected.json()
     assert payload["version"] == 2
-    assert payload["supersedes_id"] == str(old.memory_id)
+    assert payload["supersedes_id"] == str(request_item.memory_id)
     assert payload["content"] == "改为电话联系"
-    assert repository.last_user_id == get_local_user_id()
+    assert repository.last_user_id == "request-user"
 
 
 def test_forget_is_idempotently_not_found_after_hard_delete() -> None:

@@ -12,12 +12,14 @@ class StrictRequest(BaseModel):
 
 
 class MemoryCorrectionRequest(StrictRequest):
+    user_id: str | None = Field(default=None, min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._-]+$")
     content: str = Field(min_length=1, max_length=4000)
     structured_data: dict[str, Any] | None = None
     reason: str = Field(default="user_correction", min_length=1, max_length=255)
 
 
 class MemoryPurgeRequest(StrictRequest):
+    user_id: str | None = Field(default=None, min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._-]+$")
     confirmation: Literal["PURGE"]
     memory_type: MemoryType | None = None
     reason: str = Field(default="user_purge", min_length=1, max_length=255)

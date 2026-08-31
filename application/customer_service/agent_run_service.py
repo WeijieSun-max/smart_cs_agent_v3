@@ -89,15 +89,16 @@ class AgentRunRegistry:
             raise
         return run
 
-    def get(self, session_id: str) -> AgentRun | None:
+    def get(self, session_id: str, *, user_id: str | None = None) -> AgentRun | None:
         with self._lock:
             self._cleanup_locked()
-            return self._runs.get(session_id)
+            run = self._runs.get(session_id)
+            return run if run is not None and self._matches_user(run, user_id) else None
 
-    def stop(self, session_id: str) -> AgentRun | None:
+    def stop(self, session_id: str, *, user_id: str | None = None) -> AgentRun | None:
         with self._lock:
             run = self._runs.get(session_id)
-            if run is None:
+            if run is None or not self._matches_user(run, user_id):
                 return None
             if run.status == "running":
                 run.request_stop()
@@ -233,15 +234,25 @@ class AgentRunRegistry:
             str(step["startedAt"]),
         ))
 
-    def list_runs(self, session_id: str) -> list[dict[str, Any]]:
+    def list_runs(self, session_id: str, *, user_id: str | None = None) -> list[dict[str, Any]]:
         with self._lock:
             self._cleanup_locked()
-            runs = [run.as_dict() for run in self._runs.values() if run.session_id == session_id]
+            runs = [
+                run.as_dict()
+                for run in self._runs.values()
+                if run.session_id == session_id and self._matches_user(run, user_id)
+            ]
         return sorted(runs, key=lambda run: str(run["started_at"]), reverse=True)
 
-    def forget(self, session_id: str) -> None:
+    def forget(self, session_id: str, *, user_id: str | None = None) -> None:
         with self._lock:
-            self._runs.pop(session_id, None)
+            run = self._runs.get(session_id)
+            if run is not None and self._matches_user(run, user_id):
+                self._runs.pop(session_id, None)
+
+    @staticmethod
+    def _matches_user(run: AgentRun, user_id: str | None) -> bool:
+        return user_id is None or run.user_id == user_id
 
     def _cleanup_locked(self) -> None:
         now = datetime.now(timezone.utc)

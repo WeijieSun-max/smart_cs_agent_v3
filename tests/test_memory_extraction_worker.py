@@ -108,6 +108,99 @@ def test_worker_completes_event_without_summary_before_threshold() -> None:
     assert len(repository.completed) == 1
 
 
+class ExistingSummaryRepository(FakeRepository):
+    def __init__(self, messages: list[dict]) -> None:
+        super().__init__()
+        self.messages = messages
+        self.latest_summary = SessionSummary(
+            user_id="user-1",
+            session_id="session-1",
+            version=1,
+            summary_text="existing summary",
+            structured_data={},
+            covers_until_message_id=2,
+            created_at=NOW,
+            updated_at=NOW,
+        )
+
+    def get_latest_summary(self, user_id, session_id):
+        return self.latest_summary
+
+    def get_messages_after(self, user_id, session_id, after_message_id, limit=1000):
+        return self.messages
+
+
+def test_worker_waits_for_increment_turns_when_character_trigger_is_disabled() -> None:
+    repository = ExistingSummaryRepository([
+        {"message_id": 3, "role": "user", "content": "one new turn", "turn_id": "turn-1"},
+        {"message_id": 4, "role": "assistant", "content": "acknowledged", "turn_id": "turn-1"},
+    ])
+    summary_service = SimpleNamespace(
+        build=lambda **kwargs: (_ for _ in ()).throw(AssertionError("summary must not run"))
+    )
+    worker = MemoryExtractionWorker(
+        repository,
+        summary_service,
+        SimpleNamespace(extract=lambda **kwargs: []),
+        summary_increment_turns=8,
+        summary_increment_chars=0,
+    )
+
+    assert worker.run_once(now=NOW) == 1
+    assert repository.applied == []
+    assert len(repository.completed) == 1
+
+
+def test_worker_runs_at_increment_turn_threshold_when_character_trigger_is_disabled() -> None:
+    messages = [
+        {
+            "message_id": index + 3,
+            "role": "user",
+            "content": f"update {index}",
+            "turn_id": f"turn-{index}",
+        }
+        for index in range(8)
+    ]
+    repository = ExistingSummaryRepository(messages)
+    next_summary = repository.latest_summary.model_copy(update={
+        "version": 2,
+        "summary_text": "updated summary",
+        "covers_until_message_id": 10,
+    })
+    worker = MemoryExtractionWorker(
+        repository,
+        SimpleNamespace(build=lambda **kwargs: next_summary),
+        SimpleNamespace(extract=lambda **kwargs: []),
+        summary_increment_turns=8,
+        summary_increment_chars=0,
+    )
+
+    assert worker.run_once(now=NOW) == 1
+    assert len(repository.applied) == 1
+
+
+def test_worker_allows_character_threshold_to_trigger_before_increment_turns() -> None:
+    repository = ExistingSummaryRepository([
+        {"message_id": 3, "role": "user", "content": "long enough update", "turn_id": "turn-1"},
+        {"message_id": 4, "role": "assistant", "content": "acknowledged", "turn_id": "turn-1"},
+    ])
+    next_summary = repository.latest_summary.model_copy(update={
+        "version": 2,
+        "summary_text": "updated summary",
+        "covers_until_message_id": 4,
+    })
+    worker = MemoryExtractionWorker(
+        repository,
+        SimpleNamespace(build=lambda **kwargs: next_summary),
+        SimpleNamespace(extract=lambda **kwargs: []),
+        summary_increment_turns=8,
+        summary_increment_chars=5,
+    )
+
+    assert worker.run_once(now=NOW) == 1
+    assert len(repository.applied) == 1
+
+
 def test_worker_passes_retry_limit_for_dead_letter_transition() -> None:
     repository = FakeRepository()
     repository.events[0] = repository.events[0].model_copy(update={"attempts": 4})

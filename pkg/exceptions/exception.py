@@ -7,7 +7,7 @@ from pkg.log.logger import get_logger
 from pkg.telemetry import normalize_error
 
 logger = get_logger()
-SAFE_ERROR_MESSAGE = "\u7cfb\u7edf\u5904\u7406\u5f02\u5e38\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5\u3002"
+SAFE_ERROR_MESSAGE = "系统处理异常，请稍后重试。"
 
 
 class ServiceError(Exception):

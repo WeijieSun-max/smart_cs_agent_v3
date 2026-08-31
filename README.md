@@ -97,7 +97,7 @@ IDENTITY_HEADER_ENABLED=true
 TRUSTED_PROXY_NETWORKS=127.0.0.1/32,::1/128
 ```
 
-普通反向代理本身不等于认证。
+普通反向代理本身不等于认证。聊天、记忆和工作台的用户级接口均接受请求级 `user_id`：GET/DELETE 使用查询参数，POST/PATCH 使用请求体字段；省略时回退到 `LOCAL_USER_ID`。该值当前只表示调用方上下文，不构成身份认证。
 
 ## 启动
 
@@ -116,6 +116,9 @@ D:\python\agentProject\.venv\Scripts\python.exe main.py
 | `POST` | `/api/chat` | 普通对话，body 必须传 `user_id` |
 | `POST` | `/api/chat_stream` | SSE 对话 |
 | `GET` | `/api/history/{session_id}?user_id=...` | 带 ownership 的历史 |
+| `GET/POST/PATCH/DELETE` | `/api/sessions...` | 可选请求级 `user_id` 的会话管理 |
+| `GET/POST/PATCH/DELETE` | `/api/memories...` | 可选请求级 `user_id` 的记忆管理 |
+| `POST/GET` | `/api/agent/stop`、`/api/agent/status/{session_id}`、`/api/runs` | 按请求用户隔离的运行控制与查询 |
 | `GET` | `/api/tools` | 只读 Tool Catalog 元数据 |
 | `POST` | `/api/tools/call` | 已关闭（404），禁止绕过治理网关 |
 | `POST` | `/api/actions/propose` | 工作台提交结构化写提案 |

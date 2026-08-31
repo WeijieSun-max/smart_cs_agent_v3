@@ -70,6 +70,63 @@ def test_session_crud_and_history_contract() -> None:
     assert client.get("/api/sessions").json()["sessions"] == []
 
 
+def test_session_crud_supports_explicit_request_user() -> None:
+    client = _client()
+    session_id = uuid.uuid4().hex
+
+    created = client.post(
+        "/api/sessions",
+        json={"user_id": "request-user", "session_id": session_id, "agent_id": "general"},
+    )
+    assert created.status_code == 201
+
+    owner_sessions = client.get("/api/sessions", params={"user_id": "request-user"}).json()["sessions"]
+    other_sessions = client.get("/api/sessions", params={"user_id": "other-user"}).json()["sessions"]
+    assert [session["id"] for session in owner_sessions] == [session_id]
+    assert other_sessions == []
+
+    denied = client.patch(
+        f"/api/sessions/{session_id}",
+        json={"user_id": "other-user", "favorite": True},
+    )
+    updated = client.patch(
+        f"/api/sessions/{session_id}",
+        json={"user_id": "request-user", "favorite": True},
+    )
+    assert denied.status_code == 404
+    assert updated.status_code == 200
+    assert updated.json()["favorite"] is True
+
+    assert client.delete(f"/api/sessions/{session_id}", params={"user_id": "request-user"}).status_code == 204
+
+
+def test_agent_status_and_stop_are_scoped_to_request_user() -> None:
+    client = _client()
+    session_id = uuid.uuid4().hex
+    run = agent_run_service.registry.begin(session_id, uuid.uuid4().hex, user_id="request-user")
+
+    try:
+        other_status = client.get(f"/api/agent/status/{session_id}", params={"user_id": "other-user"})
+        other_stop = client.post(
+            "/api/agent/stop",
+            json={"user_id": "other-user", "session_id": session_id},
+        )
+        owner_status = client.get(f"/api/agent/status/{session_id}", params={"user_id": "request-user"})
+        owner_stop = client.post(
+            "/api/agent/stop",
+            json={"user_id": "request-user", "session_id": session_id},
+        )
+
+        assert other_status.json()["running"] is False
+        assert other_stop.json()["running"] is False
+        assert run.stop_requested.is_set() is True
+        assert owner_status.json()["turn_id"] == run.turn_id
+        assert owner_stop.json()["turn_id"] == run.turn_id
+    finally:
+        agent_run_service.registry.finish(run, "stopped")
+        agent_run_service.registry.forget(session_id, user_id="request-user")
+
+
 def test_current_user_setting_is_validated_and_applied(monkeypatch) -> None:
     client = _client()
     original_user_id = get_local_user_id()

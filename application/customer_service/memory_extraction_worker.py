@@ -102,8 +102,11 @@ class MemoryExtractionWorker:
         incremental_chars = sum(len(str(item.get("content", ""))) for item in messages)
         if self.summary_eligible_turns and previous is None and user_turns < self.summary_eligible_turns:
             return
-        if previous is not None and self.summary_increment_turns and user_turns < self.summary_increment_turns and incremental_chars < self.summary_increment_chars:
-            return
+        if previous is not None and self.summary_increment_turns and user_turns < self.summary_increment_turns:
+            # A non-positive character threshold disables the character-based
+            # trigger. In that mode, wait for the configured number of turns.
+            if self.summary_increment_chars <= 0 or incremental_chars < self.summary_increment_chars:
+                return
         summary = self.summary_service.build(
             user_id=user_id,
             session_id=session_id,
