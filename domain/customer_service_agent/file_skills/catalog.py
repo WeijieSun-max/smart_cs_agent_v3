@@ -2,26 +2,20 @@
 
 from __future__ import annotations
 
-import hashlib
-import re
 from pathlib import Path
-
-import yaml
 
 from domain.customer_service_agent.tools.mcp_server import MCPToolServer
 
+from .integrity import discover_skill_sources, read_skill_source, validate_skill_lock
 from .models import LoadedSkill, SkillIndexEntry, SkillMetadata
-
-_FRONTMATTER = re.compile(r"\A---\s*\r?\n(.*?)\r?\n---\s*\r?\n", re.DOTALL)
-_REFERENCE_LINK = re.compile(r"\[[^\]]+\]\((references/[^)#?]+)(?:#[^)]+)?\)")
 
 
 class FileSkillCatalog:
     """以 ``**/SKILL.md`` 为唯一业务来源的冻结目录。
 
-    启动阶段只解析 frontmatter 并记录整文件哈希；正文和引用资料在选中 Skill
-    后才加载。冻结后再次校验哈希，可防止一次请求在元数据校验后执行被替换
-    的说明或引用文件。
+    启动阶段解析 frontmatter，并校验由说明正文和显式引用共同组成的 bundle
+    哈希。正文和引用资料不保留在目录中，而是在选中 Skill 后重新读取。冻结后
+    再次校验 bundle 哈希，可防止请求执行被替换的说明或引用文件。
     """
 
     def __init__(self, root: Path, tool_server: MCPToolServer):
@@ -38,26 +32,18 @@ class FileSkillCatalog:
             raise RuntimeError("skill catalog is already frozen")
         if not self.root.is_dir():
             raise ValueError(f"skill root does not exist: {self.root}")
-        paths = sorted(self.root.rglob("SKILL.md"))
-        if not paths:
-            raise ValueError("no SKILL.md files found")
-        for path in paths:
-            raw = path.read_text(encoding="utf-8")
-            match = _FRONTMATTER.match(raw)
-            if match is None:
-                raise ValueError(f"missing YAML frontmatter: {path}")
-            parsed = yaml.safe_load(match.group(1))
-            if not isinstance(parsed, dict):
-                raise ValueError(f"invalid YAML frontmatter: {path}")
-            metadata = SkillMetadata.model_validate(parsed)
+        sources = discover_skill_sources(self.root)
+        validate_skill_lock(self.root, sources)
+        for source in sources:
+            metadata = source.metadata
             key = (metadata.name, metadata.version)
             if key in self._entries:
                 raise ValueError(f"duplicate skill name/version: {metadata.name}@{metadata.version}")
             self._validate_tool_contract(metadata)
             entry = SkillIndexEntry(
                 metadata=metadata,
-                path=path.resolve(),
-                content_hash=hashlib.sha256(raw.encode("utf-8")).hexdigest(),
+                path=source.path,
+                content_hash=source.content_hash,
             )
             self._entries[key] = entry
             current = self._active_by_name.get(metadata.name)
@@ -104,24 +90,13 @@ class FileSkillCatalog:
             raise KeyError(name)
         if agent_type not in entry.metadata.allowed_agent_types:
             raise PermissionError(f"agent type cannot load skill: {agent_type}")
-        raw = entry.path.read_text(encoding="utf-8")
-        if hashlib.sha256(raw.encode("utf-8")).hexdigest() != entry.content_hash:
+        source = read_skill_source(entry.path)
+        if source.content_hash != entry.content_hash:
             raise RuntimeError("skill changed after catalog freeze")
-        match = _FRONTMATTER.match(raw)
-        if match is None:
-            raise RuntimeError("skill frontmatter disappeared")
-        body = raw[match.end():].strip()
-        references: dict[str, str] = {}
-        skill_dir = entry.path.parent.resolve()
-        for relative in sorted(set(_REFERENCE_LINK.findall(body))):
-            target = (skill_dir / relative).resolve()
-            if skill_dir not in target.parents or not target.is_file():
-                raise ValueError(f"invalid skill reference: {relative}")
-            references[relative] = target.read_text(encoding="utf-8")
         return LoadedSkill(
             metadata=entry.metadata,
-            body=body,
-            references=references,
+            body=source.body,
+            references=source.references,
             path=entry.path,
             content_hash=entry.content_hash,
         )

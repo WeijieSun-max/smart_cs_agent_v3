@@ -6,7 +6,7 @@ FastAPI + LangGraph 的模块化单体，面向移联电信与商城客服。MyS
 
 - 请求级 `user_id`、会话归属、资源 ownership；可平滑切换为可信 Nginx `X-User-Id`。
 - LLM Supervisor 是唯一意图与调度入口，最多进行三轮有界管理；统一调度 `knowledge_agent`、`telecom_agent`、`retail_agent`，支持依赖任务和独立只读任务并行。
-- 唯一 Skill 来源为 `skills/**/SKILL.md`；启动时只索引 frontmatter，选中后加载正文和显式 references，并冻结版本/哈希。
+- 唯一 Skill 来源为 `skills/**/SKILL.md`；启动时通过 `skills/skill-lock.json` 校验不可变版本及正文/references 组合哈希，选中后再加载正文和显式 references。
 - `telecom-plan-recommendation` 根据最近三个账期的流量、通话和确定性成本比较给出只读建议。
 - `retail-order-assistance` 负责本人订单历史、日期/商品/状态筛选、候选消歧和详情查询，并将工具权限收紧为只读订单工具。
 - Telecom：套餐/使用量查询、套餐变更、流量补充、漫游；通信故障永久为带文档版本和引用的 RAG 指导，不存在设备 adapter。
@@ -108,6 +108,22 @@ D:\python\agentProject\.venv\Scripts\python.exe main.py
 
 启动时会校验 migration checksum、执行未应用 DDL、校验并冻结 Skill Catalog，然后编译 durable LangGraph。
 多 worker 部署时，会话互斥和停止信号仍由 MySQL 保证；资源并发上限按 worker 数量相乘，需同步扩容 MySQL/Redis 连接池，或按总预算下调每个 worker 的上限。
+
+### 发布 Skill 新版本
+
+已发布的 `name@version` 不可修改。调整 Skill 正文或 `references/` 后，必须先提升
+`SKILL.md` frontmatter 中的语义版本，再更新提交到代码库的发布锁：
+
+```powershell
+D:\python\agentProject\.venv\Scripts\python.exe scripts\update_skill_lock.py
+D:\python\agentProject\.venv\Scripts\python.exe -m pytest -q tests\test_file_skill_release_lock.py
+```
+
+更新锁只会新增版本；如果同一版本的正文或引用发生变化，命令和应用启动都会失败。
+发布时把 Skill 和 lock 文件一起构建进带唯一 tag/digest 的不可变镜像。先启动新实例并等待
+`/health/ready` 返回 ready，再停止旧实例；不要在新旧实例间挂载可变的共享 Skill 目录。
+Compose 的单个 `backend` 实例重建不属于滚动发布，生产滚动需由支持多副本和 readiness
+的编排平台或蓝绿负载均衡完成。readiness 的 Skill 摘要包含活跃版本与组合 hash，可用于验收。
 
 ## API
 

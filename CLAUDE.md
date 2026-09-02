@@ -56,8 +56,10 @@ The final compliance node is structurally unavoidable. Device troubleshooting us
 
 Production Skills are loaded only from `SKILL.md` files below the configured Skill root.
 
-- Startup reads frontmatter and hashes only, validates tool allowlists/effects/agent types, and freezes the catalog.
+- Startup validates the committed `skills/skill-lock.json`, hashes each `SKILL.md` together with its explicit references, validates tool allowlists/effects/agent types, and freezes the catalog.
 - Instructions and referenced files are loaded progressively when a Skill is selected.
+- Released `name@version` content is immutable. Change the frontmatter version and run `python scripts/update_skill_lock.py`; the command may add a version but never rewrite a released hash.
+- Bake Skills into an immutable image and roll out new instances through `/health/ready`; do not mount the Skill root from a mutable shared volume during a rolling deployment.
 - Do not restore the deleted dynamic-onboarding registry/runtime.
 - The initial telecom Skill is `skills/telecom/plan-recommendation/SKILL.md`. It recommends plans from usage and plan data; it never changes a plan.
 
