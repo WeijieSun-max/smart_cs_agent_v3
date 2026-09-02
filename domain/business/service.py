@@ -244,6 +244,21 @@ class BusinessService:
             for item in self.store.list_owned("addresses",user_id,status="active")
         ]
 
+    def get_default_address(self, user_id: str) -> dict[str, Any]:
+        """返回当前用户唯一默认地址及完整联系人，避免模型自行筛选地址列表。"""
+
+        addresses = self.list_addresses(user_id)
+        defaults = [item for item in addresses if item.get("is_default") is True]
+        if not defaults:
+            return {"status": "not_found", "address": None}
+        if len(defaults) > 1:
+            return {
+                "status": "ambiguous",
+                "address": None,
+                "candidate_count": len(defaults),
+            }
+        return {"status": "found", "address": defaults[0]}
+
     def list_payment_methods(self,user_id: str) -> list[dict[str,Any]]:
         """返回用户有效的脱敏支付方式。"""
 

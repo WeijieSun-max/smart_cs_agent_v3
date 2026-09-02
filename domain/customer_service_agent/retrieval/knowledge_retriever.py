@@ -9,8 +9,8 @@ from typing import Any
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from domain.customer_service_agent.memory.conversation_context import (
-    conversation_context_payload,
     has_conversation_context,
+    task_scoped_context_payload,
 )
 from domain.customer_service_agent.retrieval.answer_cache import rag_answer_cache
 from domain.customer_service_agent.service import knowledge_service
@@ -54,7 +54,7 @@ async def retrieve_grounded_answer(
         }
         for doc in docs[:3]
     ]
-    reference_context = conversation_context_payload(state.get("conversation_context"))
+    reference_context = task_scoped_context_payload(state.get("conversation_context"))
     has_reference_context = has_conversation_context(reference_context)
 
     # 只缓存“无参考上下文”的独立查询；带会话上下文（可能含指代）的查询始终走 LLM，避免复用错答案。

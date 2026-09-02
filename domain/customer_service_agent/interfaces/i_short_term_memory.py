@@ -58,6 +58,25 @@ class IShortTermMemory(ABC):
         """使摘要缓存失效；默认实现为空操作。"""
         del session_id, user_id
 
+    def get_pending_task(self, session_id: str, *, user_id: str | None = None) -> dict[str, object] | None:
+        """读取等待用户补充信息的结构化任务；未实现时返回 None。"""
+        del session_id, user_id
+        return None
+
+    def cache_pending_task(
+        self,
+        session_id: str,
+        task: dict[str, object],
+        *,
+        user_id: str | None = None,
+    ) -> None:
+        """缓存等待续接的结构化任务；默认实现为空操作。"""
+        del session_id, task, user_id
+
+    def delete_pending_task(self, session_id: str, *, user_id: str | None = None) -> None:
+        """删除已经恢复、取消或完成的待续接任务。"""
+        del session_id, user_id
+
     @abstractmethod
     def get_message_by_turn(
         self,

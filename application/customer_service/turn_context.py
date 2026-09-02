@@ -89,6 +89,7 @@ def prepare_turn(request: ChatRequest | ChatStreamRequest, dependencies: TurnCon
                 user_id=user_id,
                 max_tokens=settings.memory_recent_messages_tokens,
             )
+    pending_task = memory.get_pending_task(session_id, user_id=user_id)
     state = create_chat_state(
         user_id,
         session_id,
@@ -96,6 +97,7 @@ def prepare_turn(request: ChatRequest | ChatStreamRequest, dependencies: TurnCon
         turn_id=turn.turn_id,
         memory_packet=memory_packet,
         conversation_context=conversation_context,
+        pending_task=pending_task,
         user_message_persisted=existing_user is not None,
     )
     return user_id, state, turn, replay
@@ -188,6 +190,21 @@ def persist_assistant_turn(
         )
         return
     memory.add_message(session_id, "assistant", content, turn_id, user_id=user_id)
+
+
+def persist_pending_task(
+    memory,
+    session_id: str,
+    pending_task: dict[str, Any] | None,
+    *,
+    user_id: str,
+) -> None:
+    """把任务续接状态与自然语言消息分开保存，避免长回复裁剪关键槽位。"""
+
+    if pending_task is None:
+        memory.delete_pending_task(session_id, user_id=user_id)
+    else:
+        memory.cache_pending_task(session_id, pending_task, user_id=user_id)
 
 
 def clear_checkpoint(

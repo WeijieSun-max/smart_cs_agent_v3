@@ -11,6 +11,7 @@ from domain.customer_service_agent.memory.models import (
     ConversationContextMemory,
     ConversationMemoryMessage,
     MemoryPacket,
+    MemoryType,
 )
 
 
@@ -59,6 +60,24 @@ def conversation_context_payload(value: Any) -> dict[str, Any]:
     """生成可 JSON 序列化、可安全放入模型提示的上下文。"""
 
     return normalize_conversation_context(value).model_dump(mode="json")
+
+
+def task_scoped_context_payload(value: Any) -> dict[str, Any]:
+    """投影给领域子 Agent 的最小上下文。
+
+    当前消息和记忆尚未携带可靠领域标签，因此不把全局摘要、历史回复或业务
+    事实下发给子 Agent。Supervisor 负责把指代消解进 assignment；这里只保留
+    跨领域安全复用的用户偏好。实时业务事实必须由领域工具重新读取。
+    """
+
+    context = normalize_conversation_context(value)
+    return ConversationContext(
+        memories=[
+            memory
+            for memory in context.memories
+            if memory.memory_type == MemoryType.PREFERENCE
+        ]
+    ).model_dump(mode="json")
 
 
 def has_conversation_context(value: Any) -> bool:

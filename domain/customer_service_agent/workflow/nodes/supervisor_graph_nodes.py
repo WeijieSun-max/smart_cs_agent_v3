@@ -255,6 +255,10 @@ async def domain_dispatch_node(state: ChatState) -> dict[str, Any]:
         for result in batch_results.values()
         if result.status in {"needs_confirmation", "needs_clarification"}
     ]
+    resumed_pending = any(
+        _assignment_resumes_pending(item, state.get("pending_task"))
+        for item in assignments
+    )
     if terminal_results:
         fragments = [
             result.user_fragment
@@ -267,6 +271,38 @@ async def domain_dispatch_node(state: ChatState) -> dict[str, Any]:
             "supervisor_response_source": "llm",
             "sub_results": {**state.get("sub_results", {}), "supervisor": text},
         })
+        clarification_result = next(
+            (
+                result
+                for result in batch_results.values()
+                if result.status == "needs_clarification"
+            ),
+            None,
+        )
+        if clarification_result is not None and (
+            state.get("pending_task") is None or resumed_pending
+        ):
+            source_assignment = next(
+                item
+                for item in assignments
+                if item.task_id == clarification_result.task_id
+            )
+            update["pending_task"] = {
+                "schema_version": "1.0",
+                "task_id": source_assignment.task_id,
+                "agent": source_assignment.agent,
+                "capability": source_assignment.capability,
+                "objective": source_assignment.objective,
+                "arguments": source_assignment.arguments,
+                "dependencies": list(source_assignment.dependencies),
+                "clarification_question": clarification_result.user_fragment,
+                "source_turn_id": state.get("turn_id") or "untracked",
+            }
+        elif resumed_pending:
+            update["pending_task"] = None
+    elif ordered and resumed_pending:
+        # 已经重新执行过续接任务且不再需要澄清，清除旧任务状态。
+        update["pending_task"] = None
     return update
 
 
@@ -295,6 +331,7 @@ async def pending_action_execution_node(state: ChatState) -> dict[str, Any]:
     text = str((result.get("sub_results") or {}).get("supervisor") or "")
     return {
         **result,
+        "pending_task": None,
         "supervisor_response": text,
         "supervisor_response_source": "deterministic",
         "current_agent": "action_governance",
@@ -371,6 +408,20 @@ def _result_failed(value: Any) -> bool:
         return AgentResult.model_validate(value).status in {"failed", "skipped"}
     except (ValidationError, TypeError):
         return True
+
+
+def _assignment_resumes_pending(
+    assignment: AgentAssignment,
+    pending_task: Any,
+) -> bool:
+    """按 Agent 与能力识别续接任务，避免无关查询误清理未完成状态。"""
+
+    if not isinstance(pending_task, dict):
+        return False
+    return (
+        pending_task.get("agent") == assignment.agent
+        and pending_task.get("capability") == assignment.capability
+    )
 
 
 def _dumped(result: AgentResult | None) -> dict[str, Any] | None:

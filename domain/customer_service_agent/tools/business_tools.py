@@ -184,6 +184,30 @@ async def retail_list_addresses(_trusted_context: dict | None=None) -> list[dict
     return await asyncio.to_thread(business_service.get_service().list_addresses,_user(_trusted_context))
 
 
+@server.register(
+    name="retail_get_default_address",
+    description=(
+        "读取当前用户唯一默认收货地址，包括完整收件人、联系电话、地址、默认状态和版本；"
+        "修改默认地址且用户未要求变更联系人时，应先调用本工具并沿用联系人"
+    ),
+    input_schema={"type": "object", "properties": {}, "additionalProperties": False},
+    category="retail",
+    effect="read",
+    supports_idempotency=False,
+    domain="retail",
+    capabilities=("address_query", "default_address", "create_address"),
+    allowed_agent_types=("retail_agent",),
+    parallel_safe=True,
+)
+async def retail_get_default_address(_trusted_context: dict | None = None) -> dict:
+    """读取可信身份绑定用户的默认地址，不接受模型提供的用户标识。"""
+
+    return await asyncio.to_thread(
+        business_service.get_service().get_default_address,
+        _user(_trusted_context),
+    )
+
+
 @server.register(name="retail_list_payment_methods",description="列出当前用户可用支付方式的脱敏信息",input_schema={"type":"object","properties":{}},category="retail",effect="read",supports_idempotency=False,domain="retail",capabilities=("payment_query",),allowed_agent_types=("retail_agent",),parallel_safe=True)
 async def retail_list_payment_methods(_trusted_context: dict | None=None) -> list[dict]:
     """列出当前用户有效的脱敏支付方式。"""

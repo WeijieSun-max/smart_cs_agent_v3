@@ -289,9 +289,7 @@ class MySQLBusinessStore:
                     "label": args.get("label") or "默认收货地址",
                     "recipient": args["recipient"],
                     "phone": args["phone"],
-                    "full_address": (
-                        f"{args['province']}{args['city']}{args['district']}{args['detail']}"
-                    ),
+                    "full_address": _format_full_address(args),
                     "is_default": set_default,
                 },
             }
@@ -354,6 +352,15 @@ def _normalize(value: Any) -> Any:
 
 def _naive(value: datetime) -> datetime:
     return value.astimezone(timezone.utc).replace(tzinfo=None)
+
+
+def _format_full_address(arguments: dict[str, Any]) -> str:
+    """格式化完整地址，直辖市的省市同名值只展示一次。"""
+
+    province = str(arguments.get("province") or "")
+    city = str(arguments.get("city") or "")
+    prefix = province if province == city else f"{province}{city}"
+    return f"{prefix}{arguments.get('district') or ''}{arguments.get('detail') or ''}"
 
 
 def _action_row(row: dict[str, Any]) -> dict[str, Any]:

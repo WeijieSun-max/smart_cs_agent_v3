@@ -151,6 +151,31 @@ class PersistentConversationMemory(IShortTermMemory):
         except Exception:
             record_fallback("redis")
 
+    def get_pending_task(self, session_id: str, *, user_id: str | None = None) -> dict[str, object] | None:
+        try:
+            return self.cache.get_pending_task(session_id, user_id=user_id)
+        except Exception:
+            record_fallback("redis")
+            return None
+
+    def cache_pending_task(
+        self,
+        session_id: str,
+        task: dict[str, object],
+        *,
+        user_id: str | None = None,
+    ) -> None:
+        try:
+            self.cache.cache_pending_task(session_id, task, user_id=user_id)
+        except Exception:
+            record_fallback("redis")
+
+    def delete_pending_task(self, session_id: str, *, user_id: str | None = None) -> None:
+        try:
+            self.cache.delete_pending_task(session_id, user_id=user_id)
+        except Exception:
+            record_fallback("redis")
+
     def get_history(
         self,
         session_id: str,

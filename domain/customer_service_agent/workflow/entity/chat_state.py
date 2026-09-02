@@ -56,6 +56,7 @@ class ChatState(MessagesState):
     agent_assignments: list[dict[str, Any]]  # 当前待执行的结构化 Agent 任务。
     agent_assignment_history: list[dict[str, Any]]  # 本轮已调度任务，供复核、评测和审计。
     active_action: dict[str, Any] | None  # 当前会话待确认治理动作的只读摘要。
+    pending_task: dict[str, Any] | None  # 等待用户补充信息的结构化任务，独立于自然语言历史。
     supervisor_response: str  # Supervisor 最终回答或澄清问题。
     supervisor_response_source: str  # llm 或 deterministic，供合规层选择审查强度。
 
@@ -68,6 +69,7 @@ def create_chat_state(
     turn_id: str = "untracked",
     memory_packet: dict[str, Any] | None = None,
     conversation_context: dict[str, Any] | None = None,
+    pending_task: dict[str, Any] | None = None,
     user_message_persisted: bool = False,
 ) -> ChatState:
     """为新一轮请求创建完整、无共享可变默认值的初始状态。"""
@@ -109,6 +111,7 @@ def create_chat_state(
         "agent_assignments": [],
         "agent_assignment_history": [],
         "active_action": None,
+        "pending_task": pending_task,
         "supervisor_response": "",
         "supervisor_response_source": "deterministic",
     }

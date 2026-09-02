@@ -17,6 +17,7 @@ def test_production_tool_discovery_contains_only_telecom_and_retail_tools() -> N
         "retail_get_order",
         "retail_cancel_order",
         "retail_create_address",
+        "retail_get_default_address",
     } <= names
     assert not names.intersection({"order_query", "knowledge_search", "ticket_create", "ticket_query", "risk_check", "user_profile"})
 

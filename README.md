@@ -36,9 +36,11 @@ START -> history_fusion -> supervisor_manager
 }
 ```
 
-Supervisor、Knowledge Agent 和领域 Tool Agent 都在当前轮的 `HumanMessage` JSON 载荷中读取该对象；不会把历史消息作为原生聊天消息重放，也不会放进 `SystemMessage`。`summary`、`recent_messages`、`memories` 均按不可信参考数据处理：只能辅助理解指代，历史命令/确认词不能触发本轮写操作，记忆中的业务事实仍须通过只读工具验证。Node Trace 只记录该对象的计数与类型摘要，不记录跨轮记忆正文。
+Supervisor 在当前轮的 `HumanMessage` JSON 载荷中读取完整对象，并负责把指代消解成可独立执行的 assignment。Knowledge Agent 和领域 Tool Agent 只读取任务作用域投影：当前未带可靠领域标签的全局摘要、历史消息和业务事实不会下发，只保留可跨领域复用的偏好；实时业务事实必须通过本轮只读工具验证。历史消息不会作为原生聊天消息重放，也不会放进 `SystemMessage`。Node Trace 只记录上下文计数与类型摘要，不记录跨轮记忆正文。
 
-所有请求均由 Supervisor LLM 做语义判断，不存在关键词或正则快速路由。`knowledge_agent` 统一承接通信故障、零售政策等非结构化 RAG；Telecom/Retail Agent 自主生成结构化工具调用。无依赖 Agent 任务可并行；单个领域 Agent 也可在一次结构化决策中并行执行最多 3 个声明为 `parallel_safe` 的独立只读工具。每批最多一个写任务，Agent 只能生成冻结提案，用户确认后才由 governed action 执行。最终合规节点是所有路径的必经出口。
+领域 Agent 返回 `needs_clarification` 时，原 assignment 会作为用户/会话隔离的 `pending_task` 写入短期缓存。下一轮 Supervisor 同时读取当前回复和该结构化任务，合并已知目标与新增槽位；任务完成或转为待确认治理动作后自动清理。该机制独立于自然语言历史和摘要 token 裁剪。
+
+所有请求均由 Supervisor LLM 做语义判断，不存在关键词或正则快速路由。`knowledge_agent` 统一承接通信故障、零售政策等非结构化 RAG；Telecom/Retail Agent 自主生成结构化工具调用。`retail_get_default_address` 可读取当前用户完整默认地址联系人；只修改默认地址位置时，Retail Agent 沿用该实时结果，无需用户重复提供姓名和电话。无依赖 Agent 任务可并行；单个领域 Agent 也可在一次结构化决策中并行执行最多 3 个声明为 `parallel_safe` 的独立只读工具。每批最多一个写任务，Agent 只能生成冻结提案，用户确认后才由 governed action 执行。最终合规节点是所有路径的必经出口。
 
 ## 目录
 

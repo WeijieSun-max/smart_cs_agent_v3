@@ -89,6 +89,32 @@ class ShortTermMemoryService:
             return self.memory.get_context_window(session_id, max_chars=max_chars)
         return self.memory.get_context_window(session_id, max_chars=max_chars, user_id=user_id)
 
+    def get_pending_task(
+        self,
+        session_id: str,
+        *,
+        user_id: str | None = None,
+    ) -> dict[str, object] | None:
+        """读取当前会话等待续接的结构化任务。"""
+
+        return self.memory.get_pending_task(session_id, user_id=user_id)
+
+    def cache_pending_task(
+        self,
+        session_id: str,
+        task: dict[str, object],
+        *,
+        user_id: str | None = None,
+    ) -> None:
+        """缓存当前会话等待续接的结构化任务。"""
+
+        self.memory.cache_pending_task(session_id, task, user_id=user_id)
+
+    def delete_pending_task(self, session_id: str, *, user_id: str | None = None) -> None:
+        """清理已完成或已转为治理提案的待续接任务。"""
+
+        self.memory.delete_pending_task(session_id, user_id=user_id)
+
     def create_session(
         self,
         session_id: str,

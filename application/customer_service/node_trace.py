@@ -171,6 +171,8 @@ def _redact_credentials(value: Any) -> Any:
                 redacted[str(key)] = _memory_packet_trace_summary(item)
             elif normalized_key == "conversationcontext" and isinstance(item, dict):
                 redacted[str(key)] = _conversation_context_trace_summary(item)
+            elif normalized_key in {"pendingtask", "activependingtask"} and isinstance(item, dict):
+                redacted[str(key)] = _pending_task_trace_summary(item)
             else:
                 redacted[str(key)] = (
                     "[REDACTED_CREDENTIAL]"
@@ -227,7 +229,12 @@ def _contains_context_key(value: Any) -> bool:
     if isinstance(value, dict):
         for key, item in value.items():
             normalized_key = re.sub(r"[^a-z0-9]", "", str(key).strip().lower())
-            if normalized_key in {"conversationcontext", "memorypacket"}:
+            if normalized_key in {
+                "conversationcontext",
+                "memorypacket",
+                "pendingtask",
+                "activependingtask",
+            }:
                 return True
             if _contains_context_key(item):
                 return True
@@ -272,6 +279,19 @@ def _conversation_context_trace_summary(context: dict[str, Any]) -> dict[str, An
         "memory_count": len(memories) if isinstance(memories, list) else 0,
         "memory_types": memory_types,
         "_redacted": "STRUCTURED_MEMORY_REFERENCE_DATA",
+    }
+
+
+def _pending_task_trace_summary(task: dict[str, Any]) -> dict[str, Any]:
+    arguments = task.get("arguments")
+    return {
+        "schema_version": task.get("schema_version"),
+        "task_id": task.get("task_id"),
+        "agent": task.get("agent"),
+        "capability": task.get("capability"),
+        "argument_keys": sorted(str(key) for key in arguments) if isinstance(arguments, dict) else [],
+        "clarification_present": bool(task.get("clarification_question")),
+        "_redacted": "STRUCTURED_PENDING_TASK",
     }
 
 

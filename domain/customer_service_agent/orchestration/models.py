@@ -104,6 +104,7 @@ class AgentStepDecision(BaseModel):
     tool_calls: tuple[ReadToolCall, ...] = Field(default_factory=tuple, max_length=3)
     response: str | None = Field(default=None, max_length=20_000)
     impact_summary: str | None = Field(default=None, max_length=2000)
+    missing_fields: tuple[str, ...] = Field(default_factory=tuple, max_length=32)
 
     @model_validator(mode="after")
     def validate_step_payload(self) -> "AgentStepDecision":
@@ -119,6 +120,10 @@ class AgentStepDecision(BaseModel):
             raise ValueError("tool_calls cannot contain a single tool_name")
         if self.action in {"final", "clarify"} and not self.response:
             raise ValueError("response action requires response")
+        if self.action == "clarify" and not self.missing_fields:
+            raise ValueError("clarify requires missing_fields")
+        if self.action != "clarify" and self.missing_fields:
+            raise ValueError("only clarify may contain missing_fields")
         if self.action == "propose_write" and not self.impact_summary:
             raise ValueError("write proposal requires impact_summary")
         return self

@@ -1,4 +1,5 @@
 import asyncio
+import json
 
 from domain.customer_service_agent.agents import supervisor_agent
 from domain.customer_service_agent.workflow.entity.chat_state import create_chat_state
@@ -116,3 +117,41 @@ def test_pending_action_is_classified_by_llm(monkeypatch) -> None:
     ))
 
     assert decision.action == "confirm_action"
+
+
+def test_pending_task_is_given_to_supervisor_for_standalone_assignment(monkeypatch) -> None:
+    captured = []
+
+    def invoke(messages, **_kwargs):
+        captured.extend(messages)
+        return Response(
+            '{"action":"dispatch","standalone_query":"创建北京默认地址并沿用原联系人",'
+            '"assignments":[{"task_id":"R2","agent":"retail_agent",'
+            '"objective":"创建北京市朝阳区应天路88号并沿用默认联系人",'
+            '"capability":"default_address","dependencies":[],'
+            '"arguments":{"contact_strategy":"reuse_current_default"}}],"confidence":0.99}'
+        )
+
+    monkeypatch.setattr(supervisor_agent, "invoke_llm", invoke)
+    state = create_chat_state(
+        "user-1",
+        "session-1",
+        "使用原来默认地址的联系人",
+        pending_task={
+            "task_id": "R1",
+            "agent": "retail_agent",
+            "capability": "default_address",
+            "objective": "创建北京市朝阳区应天路88号并设为默认地址",
+            "arguments": {"detail": "应天路88号"},
+        },
+    )
+
+    decision = asyncio.run(supervisor_agent.decide_next_step(
+        state,
+        active_action=None,
+        allow_dispatch=True,
+    ))
+
+    payload = json.loads(captured[-1].content)
+    assert payload["active_pending_task"]["arguments"]["detail"] == "应天路88号"
+    assert decision.assignments[0].arguments["contact_strategy"] == "reuse_current_default"

@@ -328,9 +328,7 @@ class InMemoryBusinessStore:
                 "label": address["label"],
                 "recipient": args["recipient"],
                 "phone": args["phone"],
-                "full_address": (
-                    f"{args['province']}{args['city']}{args['district']}{args['detail']}"
-                ),
+                "full_address": _format_full_address(args),
                 "is_default": set_default,
             },
         }
@@ -382,6 +380,15 @@ def _id_field(resource: str) -> str:
     """返回 fixture 表的主键字段名。"""
 
     return {"users": "user_id", "plans": "plan_id", "lines": "line_id", "usage_cycles": "usage_id", "products": "product_id", "variants": "variant_id", "orders": "order_id", "addresses": "address_id", "payment_methods": "payment_method_id"}.get(resource, f"{resource.rstrip('s')}_id")
+
+
+def _format_full_address(arguments: dict[str, Any]) -> str:
+    """格式化完整地址，直辖市的省市同名值只展示一次。"""
+
+    province = str(arguments.get("province") or "")
+    city = str(arguments.get("city") or "")
+    prefix = province if province == city else f"{province}{city}"
+    return f"{prefix}{arguments.get('district') or ''}{arguments.get('detail') or ''}"
 
 
 def _matches(row: dict[str, Any], filters: dict[str, Any]) -> bool:

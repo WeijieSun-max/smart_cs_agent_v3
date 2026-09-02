@@ -103,6 +103,30 @@ def test_debug_serializer_records_only_memory_packet_metadata() -> None:
     }
 
 
+def test_debug_serializer_redacts_pending_task_arguments_and_objective() -> None:
+    result = serialize_debug_value({
+        "active_pending_task": {
+            "schema_version": "1.0",
+            "task_id": "R1",
+            "agent": "retail_agent",
+            "capability": "default_address",
+            "objective": "创建北京市朝阳区应天路88号",
+            "arguments": {
+                "recipient": "苏军",
+                "phone": "15588697856",
+                "detail": "应天路88号",
+            },
+            "clarification_question": "是否沿用原联系人",
+        }
+    })
+
+    pending = result["active_pending_task"]
+    assert pending["argument_keys"] == ["detail", "phone", "recipient"]
+    assert pending["_redacted"] == "STRUCTURED_PENDING_TASK"
+    assert "苏军" not in json.dumps(result, ensure_ascii=False)
+    assert "应天路88号" not in json.dumps(result, ensure_ascii=False)
+
+
 def test_debug_serializer_redacts_structured_context_inside_llm_json_prompt() -> None:
     prompt = json.dumps({
         "current_query": "继续处理",

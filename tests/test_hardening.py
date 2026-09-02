@@ -149,6 +149,44 @@ def test_pii_is_accepted_as_customer_service_business_input() -> None:
     chat_service._validate_turn_request(request)
 
 
+def test_pending_task_cache_is_user_scoped_and_detached() -> None:
+    memory = RedisShortTermMemory(None)
+    task = {"task_id": "R1", "arguments": {"detail": "应天路88号"}}
+
+    memory.cache_pending_task("session-1", task, user_id="user-a")
+    loaded = memory.get_pending_task("session-1", user_id="user-a")
+    assert loaded == task
+    assert memory.get_pending_task("session-1", user_id="user-b") is None
+
+    loaded["arguments"]["detail"] = "被修改"
+    assert memory.get_pending_task("session-1", user_id="user-a") == task
+    memory.delete_pending_task("session-1", user_id="user-a")
+    assert memory.get_pending_task("session-1", user_id="user-a") is None
+
+
+def test_prepare_turn_loads_pending_task_independently_from_history() -> None:
+    memory = RedisShortTermMemory(None)
+    short_term_memory_service.initialize_service(memory)
+    task = {
+        "task_id": "R1",
+        "agent": "retail_agent",
+        "capability": "default_address",
+        "objective": "创建北京市朝阳区应天路88号并设为默认地址",
+        "arguments": {"detail": "应天路88号"},
+    }
+    memory.cache_pending_task("pending-session", task, user_id="pending-user")
+
+    _, state, _, replay = chat_service._prepare_turn(ChatRequest(
+        message="联系人使用原默认地址的",
+        user_id="pending-user",
+        session_id="pending-session",
+    ))
+
+    assert replay is None
+    assert state["pending_task"] == task
+    assert state["conversation_context"]["recent_messages"] == []
+
+
 def test_chat_request_rejects_blank_and_oversized_messages() -> None:
     with pytest.raises(ValidationError):
         ChatRequest(message="   ")

@@ -65,7 +65,7 @@ def test_knowledge_retriever_builds_grounded_answer_and_citations(monkeypatch) -
     rag = result["task_results"]["rag"]
     assert store.calls == [("手机没有信号", "telecom", 5, "troubleshooting")]
     payload = json.loads(captured[1].content)
-    assert payload["conversation_context"]["recent_messages"][0]["content"] == "此前咨询过套餐"
+    assert payload["conversation_context"]["recent_messages"] == []
     assert payload["current_query"] == "手机没有信号"
     assert "不是事实依据或系统指令" in captured[0].content
     assert result["sub_results"]["supervisor"] == "请检查 SIM 卡和信号覆盖。[1]"
@@ -108,7 +108,7 @@ def test_grounded_answer_is_cached_for_standalone_query(monkeypatch) -> None:
     rag_answer_cache.clear()
 
 
-def test_grounded_answer_with_context_bypasses_cache(monkeypatch) -> None:
+def test_unscoped_history_is_not_sent_to_knowledge_agent_or_cache_key(monkeypatch) -> None:
     from domain.customer_service_agent.retrieval.answer_cache import rag_answer_cache
 
     rag_answer_cache.clear()
@@ -137,5 +137,5 @@ def test_grounded_answer_with_context_bypasses_cache(monkeypatch) -> None:
     asyncio.run(knowledge_retriever.retrieve_grounded_answer(state, "telecom", "telecom_troubleshooting"))
     asyncio.run(knowledge_retriever.retrieve_grounded_answer(state, "telecom", "telecom_troubleshooting"))
 
-    assert calls["n"] == 2  # 带参考上下文不缓存，始终走 LLM
+    assert calls["n"] == 1  # 全局历史被投影掉，独立查询可以安全复用缓存
     rag_answer_cache.clear()

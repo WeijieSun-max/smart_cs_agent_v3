@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from typing import Any, Literal
 
 from domain.action_governance import get_action_service
@@ -72,7 +71,15 @@ def _action_result_text(status: str, summary: str, receipt: dict[str, Any] | Non
     """把治理终态转换为用户可见文本，并明确区分成功与结果未知。"""
 
     if status == "succeeded":
-        return f"操作已完成：{summary}。\n执行回执：{json.dumps(receipt or {}, ensure_ascii=False, default=str)}"
+        receipt_summary = (receipt or {}).get("summary")
+        if (receipt or {}).get("resource_type") == "address" and isinstance(receipt_summary, dict):
+            address = str(receipt_summary.get("full_address") or "新收货地址")
+            contact = str(receipt_summary.get("recipient") or "")
+            phone = str(receipt_summary.get("phone") or "")
+            default_text = "并已设为默认地址" if receipt_summary.get("is_default") else ""
+            contact_text = f"，收件人：{contact}，联系电话：{phone}" if contact and phone else ""
+            return f"操作已完成：已创建{address}{contact_text}{default_text}。执行回执已生成，请勿重复提交。"
+        return f"操作已完成：{summary.rstrip('。')}。执行回执已生成，请勿重复提交。"
     if status == "indeterminate":
         return "操作结果暂时未知，请勿重复提交；系统将按同一幂等键对账。"
     return f"操作未完成（{status}），数据库未被宣称为成功。"
