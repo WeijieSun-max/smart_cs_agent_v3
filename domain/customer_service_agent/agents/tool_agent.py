@@ -162,7 +162,7 @@ async def run_tool_agent(
                 prompt_version="tool-agent-v3-parallel-reads",
             )
             decision = AgentStepDecision.model_validate(
-                parse_json_object(str(response.content))
+                _normalize_step_payload(parse_json_object(str(response.content)))
             )
             record_json_parse(f"{domain}.agent", True)
         except (ValidationError, TypeError, ValueError):
@@ -607,6 +607,24 @@ def _default_contact_from_observations(observations: list[dict[str, Any]]) -> di
                 contact[field] = value
         return contact
     return {}
+
+
+def _normalize_step_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """兼容 clarify 将 missing_fields 误放进 arguments 的常见模型漂移。
+
+    仅修复字段位置唯一且无歧义的形态；其余非法输出仍交给严格的
+    ``AgentStepDecision`` 校验关闭式拒绝，避免宽松解析掩盖工具参数错误。
+    """
+
+    if payload.get("action") != "clarify" or "missing_fields" in payload:
+        return payload
+    arguments = payload.get("arguments")
+    if not isinstance(arguments, dict) or set(arguments) != {"missing_fields"}:
+        return payload
+    normalized = dict(payload)
+    normalized["missing_fields"] = arguments["missing_fields"]
+    normalized["arguments"] = {}
+    return normalized
 
 
 def _failed(assignment: AgentAssignment, error_code: str, text: str) -> AgentResult:

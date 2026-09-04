@@ -47,7 +47,7 @@ class MySQLBusinessStore:
         ok, row = self._require().execute_query(sql, (resource_id, user_id), fetch_one=True)
         if not ok:
             raise StorageOperationError()
-        return _normalize(row) if row else None
+        return _normalize_owned_row(row, resource) if row else None
 
     def list_owned(self, resource: str, user_id: str, **filters: Any) -> list[dict[str, Any]]:
         if resource == "lines":
@@ -76,7 +76,7 @@ class MySQLBusinessStore:
         ok, rows = self._require().execute_query(sql, tuple(args))
         if not ok:
             raise StorageOperationError()
-        return [_normalize(row) for row in rows]
+        return [_normalize_owned_row(row, resource) for row in rows]
 
     def list_order_candidates(self, user_id: str) -> list[dict[str, Any]]:
         ok, rows = self._require().execute_query(
@@ -348,6 +348,22 @@ def _normalize(value: Any) -> Any:
     if isinstance(value, datetime): return value.replace(tzinfo=timezone.utc).isoformat()
     if isinstance(value, (bytes, bytearray)): return "[encrypted]"
     return value
+
+
+def _normalize_owned_row(row: dict[str, Any], resource: str) -> dict[str, Any]:
+    """规范化业务行，并仅向可信地址领域层保留待解密字段。
+
+    通用规范化会把二进制值替换为占位符，防止密文意外进入工具响应；地址
+    联系人则必须先由 ``BusinessService`` 解密。该服务会立即移除所有
+    ``*_cipher`` 字段，只返回当前用户有权读取的明文投影。
+    """
+
+    normalized = _normalize(row)
+    if resource == "addresses":
+        for field in ("recipient_cipher", "phone_cipher", "detail_cipher"):
+            if field in row:
+                normalized[field] = row[field]
+    return normalized
 
 
 def _naive(value: datetime) -> datetime:

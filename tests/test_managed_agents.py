@@ -215,7 +215,114 @@ def test_retail_agent_reuses_current_default_contact_without_asking_again(monkey
     assert "resource_id" not in user_text
 
 
+def test_default_address_recognizes_mysql_tinyint_flag() -> None:
+    _store, actions = _platform(addresses=[{
+        "address_id": "A-mysql-bool",
+        "user_id": "u1",
+        "label": "默认地址",
+        "recipient": "苏军",
+        "phone": "15588697856",
+        "province": "江苏省",
+        "city": "南京市",
+        "district": "栖霞区",
+        "detail": "原地址1号",
+        "is_default": 1,
+        "status": "active",
+        "version": 3,
+    }])
+
+    result = actions.business.get_default_address("u1")
+
+    assert result["status"] == "found"
+    assert result["address"]["address_id"] == "A-mysql-bool"
+
+
+def test_retail_agent_repairs_nested_missing_fields_and_reuses_default_contact(monkeypatch) -> None:
+    store, actions = _platform(addresses=[{
+        "address_id": "A1",
+        "user_id": "u1",
+        "label": "原默认地址",
+        "recipient": "苏军",
+        "phone": "15588697856",
+        "province": "江苏省",
+        "city": "南京市",
+        "district": "栖霞区",
+        "detail": "原地址1号",
+        "is_default": True,
+        "status": "active",
+        "version": 3,
+    }])
+    responses = iter([
+        Response(
+            '{"action":"clarify","tool_name":null,'
+            '"arguments":{"missing_fields":["recipient","phone"]},'
+            '"response":"请提供收件人和电话。","impact_summary":null}'
+        ),
+        Response(
+            '{"action":"propose_write","tool_name":"retail_create_address",'
+            '"arguments":{"province":"河南省","city":"郑州市","district":"二七区",'
+            '"detail":"南京路88号","set_default":true},'
+            '"impact_summary":"沿用当前默认联系人，创建郑州地址并设为默认地址"}'
+        ),
+    ])
+    monkeypatch.setattr(tool_agent, "invoke_llm", lambda *_args, **_kwargs: next(responses))
+    assignment = AgentAssignment(
+        task_id="R-nested-clarify",
+        agent="retail_agent",
+        objective="将默认地址改为河南省郑州市二七区南京路88号",
+        capability="default_address",
+        arguments={"address_line": "河南省郑州市二七区南京路88号"},
+    )
+
+    result = asyncio.run(tool_agent.run_tool_agent(
+        assignment,
+        create_chat_state("u1", "s-nested-clarify", assignment.objective),
+        _identity("s-nested-clarify"),
+    ))
+
+    assert result.status == "needs_confirmation"
+    assert result.error_code is None
+    completed = asyncio.run(actions.confirm(_identity("s-nested-clarify")))
+    assert completed.status == "succeeded"
+    default_address = actions.business.get_default_address("u1")["address"]
+    assert default_address["recipient"] == "苏军"
+    assert default_address["phone"] == "15588697856"
+    assert default_address["province"] == "河南省"
+    assert default_address["detail"] == "南京路88号"
+    assert store.get_owned("addresses", "A1", "u1")["is_default"] is False
+
+
 def test_natural_language_confirmation_is_applied_only_after_llm_decision(monkeypatch) -> None:
+    store, actions = _platform()
+    actions.propose_write(
+        "telecom_change_plan",
+        {"line_id": "L1", "plan_id": "P2", "expected_version": 1},
+        _identity(),
+        impact_summary="将线路 L1 变更为畅享套餐",
+    )
+    calls = 0
+
+    def invoke(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        return Response(
+            '{"action":"confirm_action","standalone_query":"同意执行待确认套餐变更",'
+            '"assignments":[],"confidence":0.99}'
+        )
+
+    monkeypatch.setattr(supervisor_agent, "invoke_llm", invoke)
+    state = create_chat_state("u1", "s1", "行，就按刚才说的办")
+
+    state.update(asyncio.run(supervisor_graph_nodes.supervisor_manager_node(state)))
+    assert supervisor_graph_nodes.supervisor_route(state) == "action"
+    state.update(asyncio.run(supervisor_graph_nodes.pending_action_execution_node(state)))
+
+    assert calls == 1
+    assert state["intent"] == "action_confirmation"
+    assert store.get_owned("lines", "L1", "u1")["current_plan_id"] == "P2"
+
+
+def test_exact_confirmation_bypasses_supervisor_llm(monkeypatch) -> None:
     store, actions = _platform()
     actions.propose_write(
         "telecom_change_plan",
@@ -226,19 +333,51 @@ def test_natural_language_confirmation_is_applied_only_after_llm_decision(monkey
     monkeypatch.setattr(
         supervisor_agent,
         "invoke_llm",
-        lambda *_args, **_kwargs: Response(
-            '{"action":"confirm_action","standalone_query":"同意执行待确认套餐变更",'
-            '"assignments":[],"confidence":0.99}'
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("exact confirmation must not call the LLM")
         ),
     )
-    state = create_chat_state("u1", "s1", "行，就按刚才说的办")
+    state = create_chat_state("u1", "s1", "确认")
 
-    state.update(asyncio.run(supervisor_graph_nodes.supervisor_manager_node(state)))
+    update = asyncio.run(supervisor_graph_nodes.supervisor_manager_node(state))
+    state.update(update)
+
+    assert update["supervisor_decision"]["action"] == "confirm_action"
+    assert update["supervisor_decision"]["confidence"] == 1.0
+    assert update["node_logs"] == [
+        "Supervisor decision: confirm_action (deterministic_action_command)"
+    ]
     assert supervisor_graph_nodes.supervisor_route(state) == "action"
     state.update(asyncio.run(supervisor_graph_nodes.pending_action_execution_node(state)))
-
     assert state["intent"] == "action_confirmation"
     assert store.get_owned("lines", "L1", "u1")["current_plan_id"] == "P2"
+
+
+def test_exact_cancellation_with_punctuation_bypasses_supervisor_llm(monkeypatch) -> None:
+    store, actions = _platform()
+    actions.propose_write(
+        "telecom_change_plan",
+        {"line_id": "L1", "plan_id": "P2", "expected_version": 1},
+        _identity(),
+        impact_summary="将线路 L1 变更为畅享套餐",
+    )
+    monkeypatch.setattr(
+        supervisor_agent,
+        "invoke_llm",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("exact cancellation must not call the LLM")
+        ),
+    )
+    state = create_chat_state("u1", "s1", "取消！")
+
+    state.update(asyncio.run(supervisor_graph_nodes.supervisor_manager_node(state)))
+
+    assert state["supervisor_decision"]["action"] == "reject_action"
+    assert supervisor_graph_nodes.supervisor_route(state) == "action"
+    state.update(asyncio.run(supervisor_graph_nodes.pending_action_execution_node(state)))
+    assert state["intent"] == "action_rejection"
+    assert "。。" not in state["sub_results"]["supervisor"]
+    assert store.get_owned("lines", "L1", "u1")["current_plan_id"] == "P1"
 
 
 def test_knowledge_agent_owns_domain_rag(monkeypatch) -> None:

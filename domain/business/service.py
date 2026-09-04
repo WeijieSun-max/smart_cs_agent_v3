@@ -248,7 +248,10 @@ class BusinessService:
         """返回当前用户唯一默认地址及完整联系人，避免模型自行筛选地址列表。"""
 
         addresses = self.list_addresses(user_id)
-        defaults = [item for item in addresses if item.get("is_default") is True]
+        # MySQL BOOLEAN is backed by TINYINT and PyMySQL returns 0/1 integers,
+        # while the in-memory adapter uses real bool values.  Compare by value
+        # so the authoritative database row is not mistaken for no default.
+        defaults = [item for item in addresses if item.get("is_default") == 1]
         if not defaults:
             return {"status": "not_found", "address": None}
         if len(defaults) > 1:

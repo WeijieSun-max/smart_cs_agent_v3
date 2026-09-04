@@ -24,7 +24,10 @@ from domain.customer_service_agent.orchestration.models import (
     AgentResult,
     SupervisorDecision,
 )
-from domain.customer_service_agent.orchestration.pending_action_resolver import resolve_pending_action
+from domain.customer_service_agent.orchestration.pending_action_resolver import (
+    explicit_pending_action_decision,
+    resolve_pending_action,
+)
 from domain.customer_service_agent.workflow.entity.chat_state import ChatState
 from domain.shared.identity import RequestIdentityContext
 from pkg.log.logger import get_logger
@@ -43,18 +46,35 @@ async def supervisor_manager_node(state: ChatState) -> dict[str, Any]:
     identity = identity_from_state(state)
     active_action = await _active_action(identity)
     round_number = int(state.get("supervisor_round") or 0)
-    decision = await decide_next_step(
-        state,
-        active_action=active_action,
-        allow_dispatch=round_number < MAX_SUPERVISOR_ROUNDS,
+    query = (state.get("raw_query") or "").strip()
+    explicit_action = (
+        explicit_pending_action_decision(query)
+        if active_action is not None
+        else None
     )
+    if explicit_action is not None:
+        decision = SupervisorDecision(
+            action=explicit_action,
+            standalone_query=query,
+            confidence=1.0,
+        )
+        decision_source = "deterministic_action_command"
+    else:
+        decision = await decide_next_step(
+            state,
+            active_action=active_action,
+            allow_dispatch=round_number < MAX_SUPERVISOR_ROUNDS,
+        )
+        decision_source = "llm"
     update: dict[str, Any] = {
         "normalized_query": decision.standalone_query,
         "supervisor_decision": decision.model_dump(mode="json"),
         "active_action": active_action,
         "agent_assignments": [item.model_dump(mode="json") for item in decision.assignments],
         "current_agent": "supervisor",
-        "node_logs": [f"Supervisor decision: {decision.action}"],
+        "node_logs": [
+            f"Supervisor decision: {decision.action} ({decision_source})"
+        ],
     }
     if decision.action == "dispatch":
         update["supervisor_round"] = round_number + 1

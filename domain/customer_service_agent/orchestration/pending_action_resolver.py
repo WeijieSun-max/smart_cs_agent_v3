@@ -3,21 +3,43 @@
 from __future__ import annotations
 
 import asyncio
+import unicodedata
 from typing import Any, Literal
 
 from domain.action_governance import get_action_service
 from domain.customer_service_agent.workflow.entity.chat_state import ChatState
 from domain.shared.identity import RequestIdentityContext
 
+_EXPLICIT_ACTION_COMMANDS: dict[str, Literal["confirm_action", "reject_action"]] = {
+    "确认": "confirm_action",
+    "确认执行": "confirm_action",
+    "取消": "reject_action",
+    "取消操作": "reject_action",
+}
+
+
+def explicit_pending_action_decision(
+    query: str,
+) -> Literal["confirm_action", "reject_action"] | None:
+    """只识别待确认状态下无歧义的规范命令，不解释一般自然语言。
+
+    NFKC 仅统一全角字符，末尾标点不改变授权含义。包含额外业务文字的
+    输入不会命中，仍交给 Supervisor 判断，避免扩大执行权限。
+    """
+
+    normalized = unicodedata.normalize("NFKC", query).strip().rstrip("。.!！")
+    return _EXPLICIT_ACTION_COMMANDS.get(normalized)
+
 async def resolve_pending_action(
     state: ChatState,
     identity: RequestIdentityContext,
     decision: Literal["confirm_action", "reject_action"] | None = None,
 ) -> dict[str, Any] | None:
-    """对活跃治理动作应用已经分类的 LLM 决定。
+    """对活跃治理动作应用已经分类的决定。
 
-    本函数刻意不解释用户原文：Supervisor 是唯一意图分类器，这一层只验证
-    动作是否存在并执行确定性状态迁移。`decision=None` 时只生成确认提示。
+    规范的“确认/取消”命令可由治理状态机确定性分类；其他自然语言仍由
+    Supervisor 分类。本层只验证动作是否存在并执行状态迁移。
+    `decision=None` 时只生成确认提示。
     """
     try:
         actions = get_action_service()
@@ -39,7 +61,7 @@ async def resolve_pending_action(
         return _build_result(
             state,
             "action_rejection",
-            f"已取消操作：{rejected.impact_summary}。",
+            f"已取消操作：{rejected.impact_summary.rstrip('。')}。",
             task_results={"action": rejected.model_dump(mode="json")},
         )
     return _build_result(
