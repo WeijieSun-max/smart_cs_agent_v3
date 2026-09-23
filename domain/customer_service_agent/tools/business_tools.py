@@ -273,6 +273,20 @@ _CREATE_ADDRESS_SCHEMA = {
     ],
 }
 
+_CREATE_ADDRESS_REUSING_DEFAULT_CONTACT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "label": {"type": "string", "minLength": 1, "maxLength": 64},
+        "province": {"type": "string", "minLength": 1, "maxLength": 64},
+        "city": {"type": "string", "minLength": 1, "maxLength": 64},
+        "district": {"type": "string", "minLength": 1, "maxLength": 64},
+        "detail": {"type": "string", "minLength": 1, "maxLength": 512},
+        "postal_code": {"type": ["string", "null"], "maxLength": 20},
+        "set_default": {"type": "boolean"},
+    },
+    "required": ["province", "city", "district", "detail", "set_default"],
+}
+
 
 @server.register(
     name="retail_create_address",
@@ -305,6 +319,49 @@ async def retail_create_address(
         {
             "recipient": recipient,
             "phone": phone,
+            "province": province,
+            "city": city,
+            "district": district,
+            "detail": detail,
+            "set_default": set_default,
+            "label": label,
+            "postal_code": postal_code,
+        },
+        _trusted_context,
+    )
+
+
+@server.register(
+    name="retail_create_address_reusing_default_contact",
+    description=(
+        "新增当前用户收货地址，并在确认执行时原子读取唯一的当前默认地址，"
+        "复用其中的收件人和联系电话；模型不得提供或猜测联系人字段"
+    ),
+    input_schema=_CREATE_ADDRESS_REUSING_DEFAULT_CONTACT_SCHEMA,
+    category="retail",
+    effect="write",
+    supports_idempotency=True,
+    domain="retail",
+    capabilities=("create_address", "default_address"),
+    allowed_agent_types=("retail_agent",),
+    risk_level="medium",
+    requires_prior_read=False,
+)
+async def retail_create_address_reusing_default_contact(
+    province: str,
+    city: str,
+    district: str,
+    detail: str,
+    set_default: bool,
+    label: str = "默认收货地址",
+    postal_code: str | None = None,
+    _trusted_context: dict | None = None,
+) -> dict:
+    """执行已确认的高层地址创建，联系人只在可信业务边界内解析。"""
+
+    return await _execute_write(
+        "retail_create_address_reusing_default_contact",
+        {
             "province": province,
             "city": city,
             "district": district,

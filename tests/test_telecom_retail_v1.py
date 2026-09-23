@@ -16,6 +16,13 @@ from domain.customer_service_agent.tools.tool_registry import get_mcp_server
 from domain.customer_service_agent.workflow.entity.chat_state import create_chat_state
 
 
+class ToolBindingFakeListChatModel(FakeListChatModel):
+    """LangChain deterministic fake with no-op native tool binding."""
+
+    def bind_tools(self, _tools, **_kwargs):
+        return self
+
+
 def fixtures():
     return {
         "users":[{"user_id":"u1","status":"active"},{"user_id":"u2","status":"active"}],
@@ -112,7 +119,7 @@ def test_retail_cancel_is_owned_versioned_and_confirmed():
 
 def test_supervisor_runs_skill_md_plan_recommendation_end_to_end(run_supervisor):
     setup_platform(); initialize_catalog(Path(__file__).parents[1]/"skills",get_mcp_server())
-    initialize_llm_client(FakeListChatModel(responses=[
+    initialize_llm_client(ToolBindingFakeListChatModel(responses=[
         '{"action":"dispatch","standalone_query":"结合最近流量和通话推荐套餐",'
         '"assignments":[{"task_id":"T1","agent":"telecom_agent",'
         '"objective":"结合最近三期使用画像比较可用套餐并给出只读建议",'

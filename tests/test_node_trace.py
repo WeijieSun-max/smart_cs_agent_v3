@@ -127,6 +127,41 @@ def test_debug_serializer_redacts_pending_task_arguments_and_objective() -> None
     assert "应天路88号" not in json.dumps(result, ensure_ascii=False)
 
 
+def test_debug_serializer_redacts_pending_write_plan_arguments_and_objectives() -> None:
+    result = serialize_debug_value({
+        "pending_write_plan": {
+            "schema_version": "1.0",
+            "plan_id": "plan-1",
+            "current_index": 0,
+            "active_action_id": "action-1",
+            "assignments": [
+                {
+                    "task_id": "W1",
+                    "agent": "retail_agent",
+                    "capability": "create_address",
+                    "objective": "创建北京市朝阳区应天路88号",
+                    "arguments": {"recipient": "苏军", "phone": "15588697856"},
+                },
+                {
+                    "task_id": "W2",
+                    "agent": "retail_agent",
+                    "capability": "default_address",
+                    "objective": "设为默认地址",
+                    "arguments": {"address_id": "address-1"},
+                },
+            ],
+        }
+    })
+
+    plan = result["pending_write_plan"]
+    serialized = json.dumps(result, ensure_ascii=False)
+    assert plan["total_items"] == 2
+    assert plan["current_argument_keys"] == ["phone", "recipient"]
+    assert plan["_redacted"] == "STRUCTURED_PENDING_WRITE_PLAN"
+    assert "苏军" not in serialized
+    assert "应天路88号" not in serialized
+
+
 def test_debug_serializer_redacts_structured_context_inside_llm_json_prompt() -> None:
     prompt = json.dumps({
         "current_query": "继续处理",

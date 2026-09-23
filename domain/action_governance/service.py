@@ -172,6 +172,7 @@ class GovernedActionService:
         self.server.validate_arguments(tool_name, normalized)
         return definition, normalized
 
+    # 提取identity的用户id, 会话id等消息, 构造仅由应用侧注入、不会暴露给模型修改的工具上下文
     @staticmethod
     def _trusted(identity: RequestIdentityContext) -> dict[str, Any]:
         """构造仅由应用侧注入、不会暴露给模型修改的工具上下文。"""

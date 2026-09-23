@@ -14,8 +14,15 @@ from domain.shared.llm.llm_service import initialize_llm_client
 _COMPLIANCE_PASS = '{"passed": true, "risk_level": "low", "violations": [], "suggestions": []}'
 
 
+class ToolBindingFakeListChatModel(FakeListChatModel):
+    """LangChain deterministic fake with no-op native tool binding."""
+
+    def bind_tools(self, _tools, **_kwargs):
+        return self
+
+
 def _initialize_workflow(responses=None):
-    initialize_llm_client(FakeListChatModel(responses=responses or [_COMPLIANCE_PASS] * 8))
+    initialize_llm_client(ToolBindingFakeListChatModel(responses=responses or [_COMPLIANCE_PASS] * 8))
     initialize_checkpoint(MemorySaver())
     business = initialize_service(InMemoryBusinessStore({
         "users": [{"user_id": "user_001", "status": "active"}],

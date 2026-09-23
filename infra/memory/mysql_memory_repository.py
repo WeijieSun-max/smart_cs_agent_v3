@@ -48,6 +48,15 @@ class MySQLMemoryRepository(IMemoryRepository):
             ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
             """,
             """
+            CREATE TABLE IF NOT EXISTS cs_memory_extraction_checkpoints (
+                user_id VARCHAR(128) NOT NULL,
+                session_id VARCHAR(128) NOT NULL,
+                last_message_id BIGINT UNSIGNED NOT NULL DEFAULT 0,
+                updated_at DATETIME(6) NOT NULL,
+                PRIMARY KEY (user_id, session_id)
+            ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
+            """,
+            """
             CREATE TABLE IF NOT EXISTS cs_memory_items (
                 memory_id CHAR(36) PRIMARY KEY,
                 user_id VARCHAR(128) NOT NULL,
@@ -117,6 +126,15 @@ class MySQLMemoryRepository(IMemoryRepository):
                 INDEX idx_cs_memory_audit_user (user_id, created_at),
                 INDEX idx_cs_memory_audit_item (memory_id, created_at)
             ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
+            """,
+            """
+            INSERT IGNORE INTO cs_memory_extraction_checkpoints
+                (user_id, session_id, last_message_id, updated_at)
+            SELECT i.user_id, s.session_id, MAX(s.message_id), UTC_TIMESTAMP(6)
+            FROM cs_memory_sources s
+            JOIN cs_memory_items i ON i.memory_id = s.memory_id
+            WHERE s.message_id IS NOT NULL
+            GROUP BY i.user_id, s.session_id
             """,
         ]
         return all(self.mysql_client.execute_update(statement)[0] for statement in statements)
@@ -246,39 +264,82 @@ class MySQLMemoryRepository(IMemoryRepository):
             raise StorageOperationError()
         return _item_from_row(row) if row else None
 
-    def apply_extraction(
+    def save_summary(self, summary: SessionSummary) -> None:
+        ok, _ = self._client().execute_update(
+            """
+            INSERT INTO cs_session_summaries
+                (summary_id, user_id, session_id, version, summary_text, structured_json,
+                 covers_until_message_id, created_at, updated_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                str(summary.summary_id), summary.user_id, summary.session_id, summary.version,
+                summary.summary_text, _json(summary.structured_data), summary.covers_until_message_id,
+                _db_time(summary.created_at), _db_time(summary.updated_at),
+            ),
+        )
+        if not ok:
+            raise StorageOperationError()
+
+    def get_extraction_checkpoint(self, user_id: str, session_id: str) -> int:
+        ok, row = self._client().execute_query(
+            """
+            SELECT last_message_id
+            FROM cs_memory_extraction_checkpoints
+            WHERE user_id = %s AND session_id = %s
+            """,
+            (user_id, session_id),
+            fetch_one=True,
+        )
+        if not ok:
+            raise StorageOperationError()
+        return int(row["last_message_id"]) if row else 0
+
+    def apply_memory_extraction(
         self,
-        summary: SessionSummary,
+        *,
+        user_id: str,
+        session_id: str,
+        expected_last_message_id: int,
+        last_message_id: int,
         items: list[MemoryItem],
         sources: list[MemorySource],
         superseded_ids: list[str],
-    ) -> None:
-        now = summary.updated_at
+        updated_at: datetime,
+    ) -> bool:
         source_map: dict[str, list[MemorySource]] = {}
         for source in sources:
             source_map.setdefault(str(source.memory_id), []).append(source)
 
-        def operation(cursor) -> None:
+        def operation(cursor) -> bool:
             cursor.execute(
                 """
-                INSERT INTO cs_session_summaries
-                    (summary_id, user_id, session_id, version, summary_text, structured_json,
-                     covers_until_message_id, created_at, updated_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                INSERT IGNORE INTO cs_memory_extraction_checkpoints
+                    (user_id, session_id, last_message_id, updated_at)
+                VALUES (%s, %s, 0, %s)
                 """,
-                (
-                    str(summary.summary_id), summary.user_id, summary.session_id, summary.version,
-                    summary.summary_text, _json(summary.structured_data), summary.covers_until_message_id,
-                    _db_time(summary.created_at), _db_time(summary.updated_at),
-                ),
+                (user_id, session_id, _db_time(updated_at)),
             )
+            cursor.execute(
+                """
+                SELECT last_message_id
+                FROM cs_memory_extraction_checkpoints
+                WHERE user_id = %s AND session_id = %s
+                FOR UPDATE
+                """,
+                (user_id, session_id),
+            )
+            row = cursor.fetchone() or {"last_message_id": 0}
+            current_last_message_id = int(row["last_message_id"])
+            if current_last_message_id != expected_last_message_id:
+                return current_last_message_id >= last_message_id
             for memory_id in superseded_ids:
                 cursor.execute(
                     "UPDATE cs_memory_items SET status = 'superseded', updated_at = %s WHERE memory_id = %s AND user_id = %s",
-                    (_db_time(now), memory_id, summary.user_id),
+                    (_db_time(updated_at), memory_id, user_id),
                 )
                 self._insert_index_event(
-                    cursor, MemoryOutboxEventType.INDEX_DELETE, memory_id, now, user_id=summary.user_id
+                    cursor, MemoryOutboxEventType.INDEX_DELETE, memory_id, updated_at, user_id=user_id
                 )
             for item in items:
                 cursor.execute(
@@ -298,11 +359,11 @@ class MySQLMemoryRepository(IMemoryRepository):
                     """,
                     (
                         str(uuid.uuid4()), str(item.memory_id), item.user_id,
-                        _json({"type": item.memory_type.value, "version": item.version}), _db_time(now),
+                        _json({"type": item.memory_type.value, "version": item.version}), _db_time(updated_at),
                     ),
                 )
                 self._insert_index_event(
-                    cursor, MemoryOutboxEventType.INDEX_UPSERT, str(item.memory_id), now, user_id=item.user_id
+                    cursor, MemoryOutboxEventType.INDEX_UPSERT, str(item.memory_id), updated_at, user_id=item.user_id
                 )
             for memory_id, memory_sources in source_map.items():
                 for source in memory_sources:
@@ -317,10 +378,20 @@ class MySQLMemoryRepository(IMemoryRepository):
                             source.source_kind, _db_time(source.created_at),
                         ),
                     )
+            cursor.execute(
+                """
+                UPDATE cs_memory_extraction_checkpoints
+                SET last_message_id = %s, updated_at = %s
+                WHERE user_id = %s AND session_id = %s
+                """,
+                (last_message_id, _db_time(updated_at), user_id, session_id),
+            )
+            return True
 
-        ok, _ = self._client().execute_in_transaction(operation)
+        ok, applied = self._client().execute_in_transaction(operation)
         if not ok:
             raise StorageOperationError()
+        return bool(applied)
 
     @staticmethod
     def _insert_index_event(
@@ -608,6 +679,10 @@ class MySQLMemoryRepository(IMemoryRepository):
             deleted.append(memory_id)
         cursor.execute(
             "DELETE FROM cs_session_summaries WHERE user_id = %s AND session_id = %s",
+            (user_id, session_id),
+        )
+        cursor.execute(
+            "DELETE FROM cs_memory_extraction_checkpoints WHERE user_id = %s AND session_id = %s",
             (user_id, session_id),
         )
         return deleted

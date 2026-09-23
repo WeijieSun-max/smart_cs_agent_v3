@@ -58,6 +58,7 @@ def test_session_source_deletion_removes_single_source_and_keeps_shared_memory()
     ]
     assert item_deletes == [("single-memory", "user-1")]
     assert any("DELETE FROM cs_session_summaries" in sql for sql, _ in cursor.calls)
+    assert any("DELETE FROM cs_memory_extraction_checkpoints" in sql for sql, _ in cursor.calls)
     assert any("INSERT INTO cs_memory_audit" in sql for sql, _ in cursor.calls)
     assert any("index_delete" in repr(args) for sql, args in cursor.calls if "cs_memory_outbox" in sql)
 

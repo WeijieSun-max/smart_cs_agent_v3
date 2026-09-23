@@ -6,6 +6,7 @@ import uuid
 from typing import TYPE_CHECKING, Any
 
 from domain.customer_service_agent.interfaces.i_conversation_archive import IConversationArchive
+from domain.customer_service_agent.memory.models import MemoryOutboxEventType
 from infra.db.mysql_client import MySQLClient, get_mysql_client
 from pkg.exceptions.exception import StorageOperationError, StorageUnavailableError
 from pkg.security import get_local_user_id
@@ -322,14 +323,21 @@ class MySQLConversationArchive(IConversationArchive):
                     separators=(",", ":"),
                     sort_keys=True,
                 )
-                cursor.execute(
-                    """
-                    INSERT IGNORE INTO cs_memory_outbox
-                        (event_id, event_type, aggregate_id, payload_json, status, attempts, available_at, created_at)
-                    VALUES (%s, 'turn_completed', %s, %s, 'pending', 0, %s, %s)
-                    """,
-                    (str(uuid.uuid4()), turn_id, payload, created_at, created_at),
-                )
+                for event_type in (
+                    MemoryOutboxEventType.MEMORY_EXTRACT,
+                    MemoryOutboxEventType.SUMMARY_UPDATE,
+                ):
+                    cursor.execute(
+                        """
+                        INSERT IGNORE INTO cs_memory_outbox
+                            (event_id, event_type, aggregate_id, payload_json, status, attempts, available_at, created_at)
+                        VALUES (%s, %s, %s, %s, 'pending', 0, %s, %s)
+                        """,
+                        (
+                            str(uuid.uuid4()), event_type.value, turn_id, payload,
+                            created_at, created_at,
+                        ),
+                    )
             return True
 
         ok, result = client.execute_in_transaction(operation)

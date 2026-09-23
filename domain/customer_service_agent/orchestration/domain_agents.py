@@ -23,6 +23,7 @@ class DomainAgentState(TypedDict):
     parent_state: ChatState
     identity: RequestIdentityContext
     assignment: dict[str, Any]
+    dependency_results: dict[str, dict[str, Any]]
     result: dict[str, Any] | None
 
 
@@ -30,7 +31,15 @@ async def _knowledge_executor(state: DomainAgentState) -> dict[str, Any]:
     """校验 assignment 后调用只读知识 Agent。"""
 
     assignment = AgentAssignment.model_validate(state["assignment"])
-    result = await run_knowledge_agent(assignment, state["parent_state"])
+    dependency_results = state.get("dependency_results") or {}
+    if dependency_results:
+        result = await run_knowledge_agent(
+            assignment,
+            state["parent_state"],
+            dependency_results=dependency_results,
+        )
+    else:
+        result = await run_knowledge_agent(assignment, state["parent_state"])
     return {"result": result.model_dump(mode="json")}
 
 
@@ -59,11 +68,20 @@ async def _tool_executor(state: DomainAgentState, expected_agent: str) -> dict[s
             error_code="supervisor.agent_mismatch",
         )
     else:
-        result = await run_tool_agent(
-            assignment,
-            state["parent_state"],
-            state["identity"],
-        )
+        dependency_results = state.get("dependency_results") or {}
+        if dependency_results:
+            result = await run_tool_agent(
+                assignment,
+                state["parent_state"],
+                state["identity"],
+                dependency_results=dependency_results,
+            )
+        else:
+            result = await run_tool_agent(
+                assignment,
+                state["parent_state"],
+                state["identity"],
+            )
     return {"result": result.model_dump(mode="json")}
 
 

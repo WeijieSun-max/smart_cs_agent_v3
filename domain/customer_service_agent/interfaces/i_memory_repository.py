@@ -80,14 +80,29 @@ class IMemoryRepository(ABC):
         pass
 
     @abstractmethod
-    def apply_extraction(
+    def save_summary(self, summary: SessionSummary) -> None:
+        """持久化一个新的会话摘要版本。"""
+        pass
+
+    @abstractmethod
+    def get_extraction_checkpoint(self, user_id: str, session_id: str) -> int:
+        """返回长期记忆提取已经覆盖的最大消息 ID；尚未处理时返回 0。"""
+        pass
+
+    @abstractmethod
+    def apply_memory_extraction(
         self,
-        summary: SessionSummary,
+        *,
+        user_id: str,
+        session_id: str,
+        expected_last_message_id: int,
+        last_message_id: int,
         items: list[MemoryItem],
         sources: list[MemorySource],
         superseded_ids: list[str],
-    ) -> None:
-        """原子保存摘要、提取记忆、来源关系、取代关系和索引事件。"""
+        updated_at: datetime,
+    ) -> bool:
+        """原子保存长期记忆及索引事件，并以乐观游标推进提取进度。"""
         pass
 
     @abstractmethod

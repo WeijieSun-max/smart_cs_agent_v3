@@ -63,6 +63,11 @@ class ScriptedChatModel:
         content = scripted.pop(0) if scripted else self._responses.get(run_name, self._default)
         return AIMessage(content=content)
 
+    def bind_tools(self, _tools: Any, **_kwargs: Any) -> "ScriptedChatModel":
+        """Accept native contracts while replaying legacy migration fixtures."""
+
+        return self
+
     def reset(self, script: dict[str, tuple[dict[str, Any] | str, ...]] | None = None) -> None:
         self.calls.clear()
         self._script = {

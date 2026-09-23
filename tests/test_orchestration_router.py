@@ -82,6 +82,31 @@ def test_cross_domain_assignments_are_preserved(monkeypatch) -> None:
     assert [item.agent for item in decision.assignments] == ["telecom_agent", "retail_agent"]
 
 
+def test_multiple_write_intents_are_preserved_for_ordered_queueing(monkeypatch) -> None:
+    monkeypatch.setattr(
+        supervisor_agent,
+        "invoke_llm",
+        lambda *_args, **_kwargs: Response(
+            '{"action":"dispatch","standalone_query":"变更套餐后开启漫游",'
+            '"assignments":['
+            '{"task_id":"W1","agent":"telecom_agent","objective":"变更套餐",'
+            '"capability":"plan_change","dependencies":[],"arguments":{"plan_id":"P2"}},'
+            '{"task_id":"W2","agent":"telecom_agent","objective":"开启漫游",'
+            '"capability":"roaming","dependencies":[],"arguments":{"enabled":true}}'
+            '],"confidence":0.99}'
+        ),
+    )
+
+    decision = asyncio.run(supervisor_agent.decide_next_step(
+        create_chat_state("user-1", "session-1", "变更套餐后开启漫游"),
+        active_action=None,
+        allow_dispatch=True,
+    ))
+
+    assert decision.action == "dispatch"
+    assert [item.task_id for item in decision.assignments] == ["W1", "W2"]
+
+
 def test_model_failure_does_not_fall_back_to_keyword_routing(monkeypatch) -> None:
     monkeypatch.setattr(
         supervisor_agent,

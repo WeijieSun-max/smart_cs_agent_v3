@@ -164,11 +164,14 @@ def invoke_llm(
     *,
     run_name: str,
     prompt_version: str = "v1",
+    tools: Sequence[dict[str, Any]] | None = None,
 ) -> Any:
     """调用选定模型并附加稳定的提示版本、节点和 profile 元数据。"""
     semaphore = _acquire_slot()
     try:
-        return get_llm_client(run_name=run_name).invoke(
+        client = get_llm_client(run_name=run_name)
+        runnable = client.bind_tools(list(tools)) if tools else client
+        return runnable.invoke(
             messages,
             config={
                 "run_name": run_name,
@@ -190,12 +193,15 @@ async def ainvoke_llm(
     *,
     run_name: str,
     prompt_version: str = "v1",
+    tools: Sequence[dict[str, Any]] | None = None,
 ) -> Any:
     """Asynchronously invoke a model under the same global limiter as sync jobs."""
 
     semaphore = await _acquire_slot_async()
     try:
-        return await get_llm_client(run_name=run_name).ainvoke(
+        client = get_llm_client(run_name=run_name)
+        runnable = client.bind_tools(list(tools)) if tools else client
+        return await runnable.ainvoke(
             messages,
             config={
                 "run_name": run_name,

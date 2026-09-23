@@ -17,6 +17,7 @@ def test_production_tool_discovery_contains_only_telecom_and_retail_tools() -> N
         "retail_get_order",
         "retail_cancel_order",
         "retail_create_address",
+        "retail_create_address_reusing_default_contact",
         "retail_get_default_address",
     } <= names
     assert not names.intersection({"order_query", "knowledge_search", "ticket_create", "ticket_query", "risk_check", "user_profile"})
@@ -47,6 +48,11 @@ def test_tool_discovery_exposes_governed_effect_metadata() -> None:
     assert by_name["retail_cancel_order"]["effect"] == "write"
     assert by_name["retail_cancel_order"]["supportsIdempotency"] is True
     assert by_name["retail_cancel_order"]["confirmationPolicy"] == "always"
+    reuse = by_name["retail_create_address_reusing_default_contact"]
+    assert reuse["effect"] == "write"
+    assert reuse["requiresPriorRead"] is False
+    assert "recipient" not in reuse["inputSchema"]["properties"]
+    assert "phone" not in reuse["inputSchema"]["properties"]
 
 
 def test_business_write_cannot_bypass_governed_action_gateway() -> None:
@@ -93,6 +99,15 @@ def test_register_requires_valid_effect_and_idempotency_metadata() -> None:
             {"type": "object"},
             effect="external",
             supports_idempotency=False,
+        )(handler)
+    with pytest.raises(ValueError, match="requires_prior_read"):
+        server.register(
+            "invalid_prior_read",
+            "invalid prior read metadata",
+            {"type": "object"},
+            effect="write",
+            supports_idempotency=True,
+            requires_prior_read="no",
         )(handler)
 
 

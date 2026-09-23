@@ -90,6 +90,7 @@ def prepare_turn(request: ChatRequest | ChatStreamRequest, dependencies: TurnCon
                 max_tokens=settings.memory_recent_messages_tokens,
             )
     pending_task = memory.get_pending_task(session_id, user_id=user_id)
+    pending_write_plan = memory.get_pending_write_plan(session_id, user_id=user_id)
     state = create_chat_state(
         user_id,
         session_id,
@@ -98,6 +99,7 @@ def prepare_turn(request: ChatRequest | ChatStreamRequest, dependencies: TurnCon
         memory_packet=memory_packet,
         conversation_context=conversation_context,
         pending_task=pending_task,
+        pending_write_plan=pending_write_plan,
         user_message_persisted=existing_user is not None,
     )
     return user_id, state, turn, replay
@@ -205,6 +207,25 @@ def persist_pending_task(
         memory.delete_pending_task(session_id, user_id=user_id)
     else:
         memory.cache_pending_task(session_id, pending_task, user_id=user_id)
+
+
+def persist_pending_write_plan(
+    memory,
+    session_id: str,
+    pending_write_plan: dict[str, Any] | None,
+    *,
+    user_id: str,
+) -> None:
+    """Persist or clear the ordered write-intent queue independently of chat text."""
+
+    if pending_write_plan is None:
+        memory.delete_pending_write_plan(session_id, user_id=user_id)
+    else:
+        memory.cache_pending_write_plan(
+            session_id,
+            pending_write_plan,
+            user_id=user_id,
+        )
 
 
 def clear_checkpoint(

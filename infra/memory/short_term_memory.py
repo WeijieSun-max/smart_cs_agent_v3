@@ -39,6 +39,7 @@ return count
         self._fallback_sessions: dict[tuple[str, str], dict[str, object]] = {}
         self._fallback_summaries: dict[tuple[str, str], dict[str, object]] = {}
         self._fallback_pending_tasks: dict[tuple[str, str], dict[str, object]] = {}
+        self._fallback_pending_write_plans: dict[tuple[str, str], dict[str, object]] = {}
         self._fallback_lock = threading.RLock()
 
     def _scope(self, user_id: str | None) -> str:
@@ -71,6 +72,10 @@ return count
     @staticmethod
     def _pending_task_key(user_id: str, session_id: str) -> str:
         return f"smartcs:{user_id}:pending_task:{session_id}"
+
+    @staticmethod
+    def _pending_write_plan_key(user_id: str, session_id: str) -> str:
+        return f"smartcs:{user_id}:pending_write_plan:{session_id}"
 
     @staticmethod
     def _now() -> datetime:
@@ -343,6 +348,59 @@ return count
         with self._fallback_lock:
             self._fallback_pending_tasks.pop(fallback_key, None)
 
+    def get_pending_write_plan(
+        self,
+        session_id: str,
+        *,
+        user_id: str | None = None,
+    ) -> dict[str, object] | None:
+        scope = self._scope(user_id)
+        fallback_key = self._fallback_key(scope, session_id)
+        if self.redis_client is not None:
+            raw = self.redis_client.get(self._pending_write_plan_key(scope, session_id))
+            if not raw:
+                return None
+            text = raw.decode("utf-8", errors="strict") if isinstance(raw, bytes) else raw
+            value = json.loads(text)
+            return value if isinstance(value, dict) else None
+        with self._fallback_lock:
+            plan = self._fallback_pending_write_plans.get(fallback_key)
+            return json.loads(json.dumps(plan, ensure_ascii=False)) if plan else None
+
+    def cache_pending_write_plan(
+        self,
+        session_id: str,
+        plan: dict[str, object],
+        *,
+        user_id: str | None = None,
+    ) -> None:
+        scope = self._scope(user_id)
+        fallback_key = self._fallback_key(scope, session_id)
+        serialized = json.dumps(plan, ensure_ascii=False, separators=(",", ":"), default=str)
+        if self.redis_client is not None:
+            self.redis_client.set(
+                self._pending_write_plan_key(scope, session_id),
+                serialized,
+                ex=self.ttl_seconds,
+            )
+            return
+        with self._fallback_lock:
+            self._fallback_pending_write_plans[fallback_key] = json.loads(serialized)
+
+    def delete_pending_write_plan(
+        self,
+        session_id: str,
+        *,
+        user_id: str | None = None,
+    ) -> None:
+        scope = self._scope(user_id)
+        fallback_key = self._fallback_key(scope, session_id)
+        if self.redis_client is not None:
+            self.redis_client.delete(self._pending_write_plan_key(scope, session_id))
+            return
+        with self._fallback_lock:
+            self._fallback_pending_write_plans.pop(fallback_key, None)
+
     def get_session(self, session_id: str, *, user_id: str | None = None) -> dict[str, object] | None:
         scope = self._scope(user_id)
         fallback_key = self._fallback_key(scope, session_id)
@@ -486,6 +544,7 @@ return count
                 self._session_key(scope, session_id),
                 self._summary_key(scope, session_id),
                 self._pending_task_key(scope, session_id),
+                self._pending_write_plan_key(scope, session_id),
             )
             self.redis_client.zrem(self._sessions_key(scope), session_id)
             return bool(removed)
@@ -496,6 +555,7 @@ return count
             self._fallback_store.pop(fallback_key, None)
             self._fallback_summaries.pop(fallback_key, None)
             self._fallback_pending_tasks.pop(fallback_key, None)
+            self._fallback_pending_write_plans.pop(fallback_key, None)
             return existed
 
     def _backfill_session_index(self, user_id: str) -> None:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections import defaultdict
 from typing import Any
+from uuid import uuid4
 
 from pydantic import ValidationError
 
@@ -22,6 +23,7 @@ from domain.customer_service_agent.orchestration.domain_agents import (
 from domain.customer_service_agent.orchestration.models import (
     AgentAssignment,
     AgentResult,
+    PendingWritePlan,
     SupervisorDecision,
 )
 from domain.customer_service_agent.orchestration.pending_action_resolver import (
@@ -45,6 +47,7 @@ async def supervisor_manager_node(state: ChatState) -> dict[str, Any]:
 
     identity = identity_from_state(state)
     active_action = await _active_action(identity)
+    active_write_plan = _parse_write_plan(state.get("pending_write_plan"))
     round_number = int(state.get("supervisor_round") or 0)
     query = (state.get("raw_query") or "").strip()
     explicit_action = (
@@ -52,7 +55,39 @@ async def supervisor_manager_node(state: ChatState) -> dict[str, Any]:
         if active_action is not None
         else None
     )
-    if explicit_action is not None:
+    same_turn_action = bool(
+        active_action is not None
+        and active_action.get("turn_id") == (state.get("turn_id") or "untracked")
+    )
+    cancel_write_plan = bool(
+        active_action is None
+        and active_write_plan is not None
+        and explicit_pending_action_decision(query) == "reject_action"
+    )
+    if cancel_write_plan:
+        decision = SupervisorDecision(
+            action="finish",
+            standalone_query=query,
+            response=(
+                "已取消剩余写操作计划，"
+                f"共 {active_write_plan.remaining_count + 1} 项操作未执行。"
+            ),
+            confidence=1.0,
+        )
+        decision_source = "deterministic_write_plan_cancel"
+    elif same_turn_action:
+        decision = SupervisorDecision(
+            action="clarify",
+            standalone_query=query,
+            clarification_question=(
+                "上一项操作已经处理，下一项操作需要单独确认："
+                f"{active_action.get('impact_summary') or '待处理写操作'}。"
+                "请阅读确认内容后，在新的消息中回复“确认”或“取消”。"
+            ),
+            confidence=1.0,
+        )
+        decision_source = "same_turn_confirmation_guard"
+    elif explicit_action is not None:
         decision = SupervisorDecision(
             action=explicit_action,
             standalone_query=query,
@@ -66,22 +101,54 @@ async def supervisor_manager_node(state: ChatState) -> dict[str, Any]:
             allow_dispatch=round_number < MAX_SUPERVISOR_ROUNDS,
         )
         decision_source = "llm"
+    dispatch_assignments = decision.assignments
+    pending_write_plan = state.get("pending_write_plan")
+    write_plan_changed = False
+    if decision.action == "dispatch":
+        try:
+            (
+                dispatch_assignments,
+                pending_write_plan,
+                write_plan_changed,
+            ) = _prepare_write_dispatch(state, decision.assignments)
+        except ValueError:
+            decision = SupervisorDecision(
+                action="clarify",
+                standalone_query=query,
+                clarification_question=(
+                    "当前仍有未完成的写操作计划，请先补充当前操作所需信息，"
+                    "或取消当前计划后再提交新的写操作。"
+                ),
+                confidence=0.0,
+            )
+            decision_source = "write_plan_guard"
+            dispatch_assignments = ()
     update: dict[str, Any] = {
         "normalized_query": decision.standalone_query,
         "supervisor_decision": decision.model_dump(mode="json"),
         "active_action": active_action,
-        "agent_assignments": [item.model_dump(mode="json") for item in decision.assignments],
+        "agent_assignments": [item.model_dump(mode="json") for item in dispatch_assignments],
+        "continue_write_plan": False,
         "current_agent": "supervisor",
         "node_logs": [
             f"Supervisor decision: {decision.action} ({decision_source})"
         ],
     }
+    if write_plan_changed:
+        update["pending_write_plan"] = (
+            pending_write_plan.model_dump(mode="json")
+            if isinstance(pending_write_plan, PendingWritePlan)
+            else None
+        )
+    if cancel_write_plan:
+        update["pending_write_plan"] = None
+        update["pending_task"] = None
     if decision.action == "dispatch":
         update["supervisor_round"] = round_number + 1
         update["intent"] = _intent_from_assignments(decision.assignments)
         update["agent_assignment_history"] = [
             *state.get("agent_assignment_history", []),
-            *(item.model_dump(mode="json") for item in decision.assignments),
+            *(item.model_dump(mode="json") for item in dispatch_assignments),
         ]
     elif decision.action == "finish":
         update["intent"] = state.get("intent") or "fallback"
@@ -109,6 +176,52 @@ def supervisor_manager_node_sync(state: ChatState) -> dict[str, Any]:
     return asyncio.run(supervisor_manager_node(state))
 
 
+def _prepare_write_dispatch(
+    state: ChatState,
+    assignments: tuple[AgentAssignment, ...],
+) -> tuple[tuple[AgentAssignment, ...], PendingWritePlan | None, bool]:
+    """Create or resume an ordered plan while releasing only its current write."""
+
+    write_capabilities = get_capability_index().write_capabilities
+    writes = [item for item in assignments if item.capability in write_capabilities]
+    existing = _parse_write_plan(state.get("pending_write_plan"))
+    if existing is not None:
+        if existing.active_action_id is not None or len(assignments) != 1 or len(writes) != 1:
+            raise ValueError("an active write plan may only resume its current intent")
+        candidate = writes[0]
+        current = existing.current_assignment
+        if candidate.agent != current.agent or candidate.capability != current.capability:
+            raise ValueError("write assignment does not match the current queued intent")
+        normalized = candidate.model_copy(update={"dependencies": ()})
+        items = list(existing.assignments)
+        items[existing.current_index] = normalized
+        updated = PendingWritePlan.model_validate({
+            **existing.model_dump(mode="python"),
+            "assignments": items,
+            "active_action_id": None,
+        })
+        return (normalized,), updated, True
+
+    if len(writes) <= 1:
+        return assignments, None, False
+
+    normalized_writes = tuple(
+        item.model_copy(update={"dependencies": ()})
+        for item in writes
+    )
+    plan = PendingWritePlan(
+        plan_id=uuid4().hex[:26],
+        source_turn_id=state.get("turn_id") or "untracked",
+        assignments=normalized_writes,
+    )
+    deferred_ids = {item.task_id for item in writes[1:]}
+    released = tuple(
+        item for item in assignments
+        if item.task_id not in deferred_ids
+    )
+    return released, plan, True
+
+
 def supervisor_route(state: ChatState) -> str:
     """把严格 Supervisor action 映射为分派、治理动作或响应分支。"""
 
@@ -123,6 +236,9 @@ def supervisor_route(state: ChatState) -> str:
 def dispatch_route(state: ChatState) -> str:
     """遇到确认/澄清结果时结束调度，否则返回 Supervisor 复核。"""
 
+    if state.get("continue_write_plan"):
+        return "continue"
+
     for value in (state.get("task_results") or {}).values():
         try:
             result = AgentResult.model_validate(value)
@@ -131,6 +247,12 @@ def dispatch_route(state: ChatState) -> str:
         if result.status in {"needs_confirmation", "needs_clarification"}:
             return "respond"
     return "review"
+
+
+def pending_action_route(state: ChatState) -> str:
+    """A successful action may advance exactly one queued write intent."""
+
+    return "continue" if state.get("continue_write_plan") else "respond"
 
 
 async def domain_dispatch_node(state: ChatState) -> dict[str, Any]:
@@ -200,7 +322,16 @@ async def domain_dispatch_node(state: ChatState) -> dict[str, Any]:
             if item.capability not in write_capabilities or item.task_id == selected_write_id
         ]
         results = await asyncio.gather(
-            *(_execute_assignment(item, state, identity) for item in selected),
+            *(
+                _execute_assignment_with_dependencies(
+                    item,
+                    state,
+                    identity,
+                    existing,
+                    batch_results,
+                )
+                for item in selected
+            ),
             return_exceptions=True,
         )
         for assignment, value in zip(selected, results, strict=True):
@@ -268,8 +399,30 @@ async def domain_dispatch_node(state: ChatState) -> dict[str, Any]:
         "skill_selection": skill_selection,
         "skill_result": skill_result,
         "current_agent": "agent_dispatcher",
+        "continue_write_plan": False,
         "node_logs": [f"Agent dispatch completed: {len(ordered)} tasks"],
     }
+    plan = _parse_write_plan(state.get("pending_write_plan"))
+    if plan is not None:
+        plan_update, next_assignment, progress = _apply_write_plan_result(
+            plan,
+            assignments,
+            batch_results,
+        )
+        if plan_update is not plan:
+            update["pending_write_plan"] = (
+                plan_update.model_dump(mode="json")
+                if plan_update is not None
+                else None
+            )
+        if next_assignment is not None:
+            update["agent_assignments"] = [next_assignment.model_dump(mode="json")]
+            update["agent_assignment_history"] = [
+                *state.get("agent_assignment_history", []),
+                next_assignment.model_dump(mode="json"),
+            ]
+            update["continue_write_plan"] = True
+            update["write_plan_progress_message"] = progress
     terminal_results = [
         result
         for result in batch_results.values()
@@ -285,7 +438,10 @@ async def domain_dispatch_node(state: ChatState) -> dict[str, Any]:
             for result in batch_results.values()
             if result.user_fragment
         ]
-        text = "\n\n".join(fragments)
+        progress = (state.get("write_plan_progress_message") or "").strip()
+        text = "\n\n".join(
+            item for item in (progress, *fragments) if item
+        )
         update.update({
             "supervisor_response": text,
             "supervisor_response_source": "llm",
@@ -345,14 +501,66 @@ async def pending_action_execution_node(state: ChatState) -> dict[str, Any]:
             "supervisor_response": text,
             "supervisor_response_source": "deterministic",
             "sub_results": {**state.get("sub_results", {}), "supervisor": text},
+            "pending_write_plan": None,
+            "continue_write_plan": False,
             "current_agent": "action_governance",
             "node_logs": ["Pending action no longer exists"],
         }
     text = str((result.get("sub_results") or {}).get("supervisor") or "")
+    plan = _parse_write_plan(state.get("pending_write_plan"))
+    pending_write_plan: PendingWritePlan | None = plan
+    next_assignment: AgentAssignment | None = None
+    action = (result.get("task_results") or {}).get("action") or {}
+    action_id = str(action.get("action_id") or "")
+    action_status = str(action.get("status") or "")
+    stop_remaining = False
+    if plan is not None:
+        action_matches = bool(
+            plan.active_action_id
+            and plan.active_action_id == action_id
+        )
+        if decision.action == "confirm_action" and action_status == "succeeded" and action_matches:
+            pending_write_plan, next_assignment, _ = _advance_write_plan(
+                plan,
+                completed_action_id=action_id,
+                progress=text,
+            )
+        else:
+            stop_remaining = plan.remaining_count > 0
+            pending_write_plan = None
+    if stop_remaining:
+        text = (
+            f"{text}\n\n剩余 {plan.remaining_count} 项写操作已停止，均未执行。"
+        )
+        result["sub_results"] = {
+            **result.get("sub_results", {}),
+            "supervisor": text,
+        }
+    continuation = next_assignment is not None
     return {
         **result,
         "pending_task": None,
-        "supervisor_response": text,
+        "pending_write_plan": (
+            pending_write_plan.model_dump(mode="json")
+            if pending_write_plan is not None
+            else None
+        ),
+        "agent_assignments": (
+            [next_assignment.model_dump(mode="json")]
+            if next_assignment is not None
+            else []
+        ),
+        "agent_assignment_history": (
+            [
+                *state.get("agent_assignment_history", []),
+                next_assignment.model_dump(mode="json"),
+            ]
+            if next_assignment is not None
+            else state.get("agent_assignment_history", [])
+        ),
+        "continue_write_plan": continuation,
+        "write_plan_progress_message": text if continuation else "",
+        "supervisor_response": "" if continuation else text,
         "supervisor_response_source": "deterministic",
         "current_agent": "action_governance",
         "node_logs": ["Pending action decision applied"],
@@ -369,6 +577,8 @@ async def _execute_assignment(
     assignment: AgentAssignment,
     state: ChatState,
     identity: RequestIdentityContext,
+    *,
+    dependency_results: dict[str, dict[str, Any]] | None = None,
 ) -> AgentResult:
     """选择与 assignment.agent 固定对应的子图并校验其结果。"""
 
@@ -381,9 +591,34 @@ async def _execute_assignment(
         "parent_state": state,
         "identity": identity,
         "assignment": assignment.model_dump(mode="json"),
+        "dependency_results": dependency_results or {},
         "result": None,
     })
     return AgentResult.model_validate(output["result"])
+
+
+async def _execute_assignment_with_dependencies(
+    assignment: AgentAssignment,
+    state: ChatState,
+    identity: RequestIdentityContext,
+    existing: dict[str, Any],
+    batch_results: dict[str, AgentResult],
+) -> AgentResult:
+    """只把 assignment 显式声明且已完成的依赖结果传入领域子图。"""
+
+    dependency_results: dict[str, dict[str, Any]] = {}
+    for task_id in assignment.dependencies:
+        value = batch_results.get(task_id) or existing.get(task_id)
+        result = AgentResult.model_validate(value)
+        dependency_results[task_id] = result.model_dump(mode="json")
+    if not dependency_results:
+        return await _execute_assignment(assignment, state, identity)
+    return await _execute_assignment(
+        assignment,
+        state,
+        identity,
+        dependency_results=dependency_results,
+    )
 
 
 async def _active_action(identity: RequestIdentityContext) -> dict[str, Any] | None:
@@ -398,6 +633,7 @@ async def _active_action(identity: RequestIdentityContext) -> dict[str, Any] | N
         return None
     return {
         "action_id": active.action_id,
+        "turn_id": active.turn_id,
         "tool_name": active.tool_name,
         "status": active.status,
         "impact_summary": active.impact_summary,
@@ -448,6 +684,78 @@ def _dumped(result: AgentResult | None) -> dict[str, Any] | None:
     """把可选任务结果转换为可放入图状态的 JSON 数据。"""
 
     return result.model_dump(mode="json") if result is not None else None
+
+
+def _parse_write_plan(value: Any) -> PendingWritePlan | None:
+    try:
+        return PendingWritePlan.model_validate(value)
+    except (ValidationError, TypeError):
+        return None
+
+
+def _apply_write_plan_result(
+    plan: PendingWritePlan,
+    assignments: list[AgentAssignment],
+    results: dict[str, AgentResult],
+) -> tuple[PendingWritePlan | None, AgentAssignment | None, str]:
+    """Bind a proposal, retain a clarification, or advance a no-op write item."""
+
+    current = plan.current_assignment
+    result = results.get(current.task_id)
+    if result is None:
+        return plan, None, ""
+    source_assignment = next(
+        (item for item in assignments if item.task_id == current.task_id),
+        current,
+    ).model_copy(update={"dependencies": ()})
+    if result.status == "needs_confirmation":
+        if not result.pending_action_id:
+            return None, None, "写操作提案缺少动作标识，剩余计划已停止。"
+        items = list(plan.assignments)
+        items[plan.current_index] = source_assignment
+        return PendingWritePlan.model_validate({
+            **plan.model_dump(mode="python"),
+            "assignments": items,
+            "active_action_id": result.pending_action_id,
+        }), None, ""
+    if result.status == "needs_clarification":
+        items = list(plan.assignments)
+        items[plan.current_index] = source_assignment
+        return PendingWritePlan.model_validate({
+            **plan.model_dump(mode="python"),
+            "assignments": items,
+            "active_action_id": None,
+        }), None, ""
+    if result.status in {"failed", "skipped"}:
+        return None, None, "当前写操作未能生成安全提案，剩余写计划已停止。"
+    if result.status == "succeeded":
+        return _advance_write_plan(
+            plan,
+            completed_action_id=None,
+            progress=result.user_fragment,
+        )
+    return plan, None, ""
+
+
+def _advance_write_plan(
+    plan: PendingWritePlan,
+    *,
+    completed_action_id: str | None,
+    progress: str,
+) -> tuple[PendingWritePlan | None, AgentAssignment | None, str]:
+    completed = list(plan.completed_action_ids)
+    if completed_action_id:
+        completed.append(completed_action_id)
+    next_index = plan.current_index + 1
+    if next_index >= len(plan.assignments):
+        return None, None, progress
+    updated = PendingWritePlan.model_validate({
+        **plan.model_dump(mode="python"),
+        "current_index": next_index,
+        "active_action_id": None,
+        "completed_action_ids": completed,
+    })
+    return updated, updated.current_assignment, progress
 
 
 def identity_from_state(state: ChatState) -> RequestIdentityContext:

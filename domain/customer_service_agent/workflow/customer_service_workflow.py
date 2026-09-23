@@ -19,6 +19,7 @@ from domain.customer_service_agent.workflow.nodes.supervisor_graph_nodes import 
     dispatch_route,
     pending_action_execution_node,
     pending_action_execution_node_sync,
+    pending_action_route,
     supervisor_manager_node,
     supervisor_manager_node_sync,
     supervisor_route,
@@ -86,9 +87,17 @@ def _build_customer_service_workflow() -> Any:
     workflow.add_conditional_edges(
         "domain_dispatch_node",
         dispatch_route,
-        {"review":"supervisor_manager_node","respond":"response_writer_node"},
+        {
+            "continue":"domain_dispatch_node",
+            "review":"supervisor_manager_node",
+            "respond":"response_writer_node",
+        },
     )
-    workflow.add_edge("pending_action_execution_node","response_writer_node")
+    workflow.add_conditional_edges(
+        "pending_action_execution_node",
+        pending_action_route,
+        {"continue":"domain_dispatch_node","respond":"response_writer_node"},
+    )
     workflow.add_edge("response_writer_node","compliance_checker_node")
     workflow.add_edge("compliance_checker_node","response_synthesizer_node")
     workflow.add_edge("response_synthesizer_node",END)

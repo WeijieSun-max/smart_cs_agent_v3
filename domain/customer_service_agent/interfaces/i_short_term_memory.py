@@ -77,6 +77,35 @@ class IShortTermMemory(ABC):
         """删除已经恢复、取消或完成的待续接任务。"""
         del session_id, user_id
 
+    def get_pending_write_plan(
+        self,
+        session_id: str,
+        *,
+        user_id: str | None = None,
+    ) -> dict[str, object] | None:
+        """读取当前会话尚未处理完的有序写计划。"""
+        del session_id, user_id
+        return None
+
+    def cache_pending_write_plan(
+        self,
+        session_id: str,
+        plan: dict[str, object],
+        *,
+        user_id: str | None = None,
+    ) -> None:
+        """保存写意图队列；队列本身不授予任何写执行权限。"""
+        del session_id, plan, user_id
+
+    def delete_pending_write_plan(
+        self,
+        session_id: str,
+        *,
+        user_id: str | None = None,
+    ) -> None:
+        """删除已经完成或被安全终止的写计划。"""
+        del session_id, user_id
+
     @abstractmethod
     def get_message_by_turn(
         self,

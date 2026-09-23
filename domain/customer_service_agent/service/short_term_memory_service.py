@@ -115,6 +115,37 @@ class ShortTermMemoryService:
 
         self.memory.delete_pending_task(session_id, user_id=user_id)
 
+    def get_pending_write_plan(
+        self,
+        session_id: str,
+        *,
+        user_id: str | None = None,
+    ) -> dict[str, object] | None:
+        """读取尚未完成的有序写意图计划。"""
+
+        return self.memory.get_pending_write_plan(session_id, user_id=user_id)
+
+    def cache_pending_write_plan(
+        self,
+        session_id: str,
+        plan: dict[str, object],
+        *,
+        user_id: str | None = None,
+    ) -> None:
+        """保存不授予执行权限的写意图队列。"""
+
+        self.memory.cache_pending_write_plan(session_id, plan, user_id=user_id)
+
+    def delete_pending_write_plan(
+        self,
+        session_id: str,
+        *,
+        user_id: str | None = None,
+    ) -> None:
+        """清理已完成或已停止的写意图计划。"""
+
+        self.memory.delete_pending_write_plan(session_id, user_id=user_id)
+
     def create_session(
         self,
         session_id: str,

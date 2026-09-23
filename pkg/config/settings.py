@@ -149,6 +149,12 @@ class Settings(BaseSettings):
     memory_worker_max_attempts: int = Field(5, alias="MEMORY_WORKER_MAX_ATTEMPTS", ge=1, le=20)
     memory_worker_lease_seconds: int = Field(60, alias="MEMORY_WORKER_LEASE_SECONDS", ge=5, le=3600)
     memory_worker_poll_seconds: float = Field(1.0, alias="MEMORY_WORKER_POLL_SECONDS", ge=0.1, le=60.0)
+    memory_extraction_increment_turns: int = Field(
+        1,
+        alias="MEMORY_EXTRACTION_INCREMENT_TURNS",
+        ge=1,
+        le=20,
+    )
 
     agent_state_ttl_seconds: int = Field(3600, alias="AGENT_STATE_TTL_SECONDS", ge=60)
     tool_call_log_limit: int = Field(1000, alias="TOOL_CALL_LOG_LIMIT", ge=10, le=100_000)

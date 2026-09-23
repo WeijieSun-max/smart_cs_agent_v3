@@ -37,6 +37,18 @@ class FakeDomainGraph:
         ).model_dump(mode="json")}
 
 
+class SequentialDomainGraph:
+    def __init__(self, result: AgentResult, calls: list[str]) -> None:
+        self.result = result
+        self.calls = calls
+        self.received = None
+
+    async def ainvoke(self, state):
+        self.received = state
+        self.calls.append(self.result.task_id)
+        return {"result": self.result.model_dump(mode="json")}
+
+
 def _cross_domain_state():
     state = create_chat_state("user-1", "session-1", "查询套餐和订单")
     assignments = (
@@ -107,6 +119,54 @@ def test_domain_dispatch_runs_reads_with_one_write_proposal_concurrently(monkeyp
 
     assert tracker.max_inflight == 2
     assert list(result["task_results"]) == ["T1", "T2"]
+
+
+def test_domain_dispatch_passes_declared_cross_agent_dependency_results(monkeypatch) -> None:
+    calls = []
+    knowledge_result = AgentResult(
+        task_id="K1",
+        agent="knowledge_agent",
+        status="succeeded",
+        facts={"rag": {"grounded": True}},
+        user_fragment="退货政策要求订单已送达。[1]",
+    )
+    retail_result = AgentResult(
+        task_id="R1",
+        agent="retail_agent",
+        status="succeeded",
+        user_fragment="订单符合退货状态要求。",
+    )
+    knowledge = SequentialDomainGraph(knowledge_result, calls)
+    retail = SequentialDomainGraph(retail_result, calls)
+    monkeypatch.setattr(supervisor_graph_nodes, "knowledge_agent_graph", knowledge)
+    monkeypatch.setattr(supervisor_graph_nodes, "retail_agent_graph", retail)
+
+    state = create_chat_state("user-1", "session-dependent", "判断订单是否符合退货政策")
+    state["agent_assignments"] = [
+        AgentAssignment(
+            task_id="K1",
+            agent="knowledge_agent",
+            objective="检索退货政策",
+            capability="retail_policy",
+        ).model_dump(mode="json"),
+        AgentAssignment(
+            task_id="R1",
+            agent="retail_agent",
+            objective="结合政策检查订单状态",
+            capability="order_query",
+            dependencies=("K1",),
+            arguments={"order_id": "order-1"},
+        ).model_dump(mode="json"),
+    ]
+
+    result = asyncio.run(supervisor_graph_nodes.domain_dispatch_node(state))
+
+    assert calls == ["K1", "R1"]
+    assert list(result["task_results"]) == ["K1", "R1"]
+    assert knowledge.received["dependency_results"] == {}
+    assert retail.received["dependency_results"] == {
+        "K1": knowledge_result.model_dump(mode="json")
+    }
 
 
 def test_supervisor_route_uses_typed_llm_action() -> None:

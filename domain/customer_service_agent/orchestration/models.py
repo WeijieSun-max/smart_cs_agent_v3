@@ -57,6 +57,42 @@ class AgentAssignment(BaseModel):
     arguments: dict[str, Any] = Field(default_factory=dict)
 
 
+class PendingWritePlan(BaseModel):
+    """Ordered write intents with exactly one item eligible for proposal at a time.
+
+    The plan stores intents rather than frozen tool calls.  Each item is sent back
+    through its domain Agent when it becomes current so ownership, current state,
+    resource version, and write arguments are read and validated again.
+    """
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    schema_version: str = "1.0"
+    plan_id: str = Field(min_length=1, max_length=64)
+    source_turn_id: str = Field(min_length=1, max_length=64)
+    assignments: tuple[AgentAssignment, ...] = Field(min_length=2, max_length=8)
+    current_index: int = Field(default=0, ge=0)
+    active_action_id: str | None = Field(default=None, max_length=64)
+    completed_action_ids: tuple[str, ...] = Field(default_factory=tuple, max_length=8)
+
+    @model_validator(mode="after")
+    def validate_cursor(self) -> "PendingWritePlan":
+        if self.current_index >= len(self.assignments):
+            raise ValueError("write plan cursor is outside the assignment list")
+        task_ids = [item.task_id for item in self.assignments]
+        if len(task_ids) != len(set(task_ids)):
+            raise ValueError("write plan task ids must be unique")
+        return self
+
+    @property
+    def current_assignment(self) -> AgentAssignment:
+        return self.assignments[self.current_index]
+
+    @property
+    def remaining_count(self) -> int:
+        return len(self.assignments) - self.current_index - 1
+
+
 class SupervisorDecision(BaseModel):
     """每轮有界 Supervisor 调度的严格输出契约。"""
 

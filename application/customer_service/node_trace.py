@@ -173,6 +173,8 @@ def _redact_credentials(value: Any) -> Any:
                 redacted[str(key)] = _conversation_context_trace_summary(item)
             elif normalized_key in {"pendingtask", "activependingtask"} and isinstance(item, dict):
                 redacted[str(key)] = _pending_task_trace_summary(item)
+            elif normalized_key in {"pendingwriteplan", "activependingwriteplan"} and isinstance(item, dict):
+                redacted[str(key)] = _pending_write_plan_trace_summary(item)
             else:
                 redacted[str(key)] = (
                     "[REDACTED_CREDENTIAL]"
@@ -234,6 +236,8 @@ def _contains_context_key(value: Any) -> bool:
                 "memorypacket",
                 "pendingtask",
                 "activependingtask",
+                "pendingwriteplan",
+                "activependingwriteplan",
             }:
                 return True
             if _contains_context_key(item):
@@ -292,6 +296,35 @@ def _pending_task_trace_summary(task: dict[str, Any]) -> dict[str, Any]:
         "argument_keys": sorted(str(key) for key in arguments) if isinstance(arguments, dict) else [],
         "clarification_present": bool(task.get("clarification_question")),
         "_redacted": "STRUCTURED_PENDING_TASK",
+    }
+
+
+def _pending_write_plan_trace_summary(plan: dict[str, Any]) -> dict[str, Any]:
+    assignments = plan.get("assignments")
+    items = assignments if isinstance(assignments, list) else []
+    current_index = plan.get("current_index", 0)
+    current = (
+        items[current_index]
+        if isinstance(current_index, int)
+        and 0 <= current_index < len(items)
+        and isinstance(items[current_index], dict)
+        else {}
+    )
+    arguments = current.get("arguments")
+    return {
+        "schema_version": plan.get("schema_version"),
+        "plan_id": plan.get("plan_id"),
+        "current_index": current_index,
+        "total_items": len(items),
+        "current_agent": current.get("agent"),
+        "current_capability": current.get("capability"),
+        "current_argument_keys": (
+            sorted(str(key) for key in arguments)
+            if isinstance(arguments, dict)
+            else []
+        ),
+        "active_action_present": bool(plan.get("active_action_id")),
+        "_redacted": "STRUCTURED_PENDING_WRITE_PLAN",
     }
 
 

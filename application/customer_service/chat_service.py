@@ -18,6 +18,7 @@ from application.customer_service.turn_context import (
     clear_checkpoint as _clear_checkpoint,
     persist_assistant_turn as _persist_assistant_turn,
     persist_pending_task as _persist_pending_task,
+    persist_pending_write_plan as _persist_pending_write_plan,
     prepare_turn as _prepare_turn,
     validate_turn_request as _validate_turn_request,
 )
@@ -126,6 +127,13 @@ async def _execute_chat_turn(request, graph, user_id: str, state: dict[str, Any]
                 memory,
                 session_id,
                 result.get("pending_task", state.get("pending_task")),
+                user_id=user_id,
+            )
+            await asyncio.to_thread(
+                _persist_pending_write_plan,
+                memory,
+                session_id,
+                result.get("pending_write_plan", state.get("pending_write_plan")),
                 user_id=user_id,
             )
             await asyncio.to_thread(
@@ -279,6 +287,7 @@ async def _generate_stream_events_admitted(
     trace_recorder = NodeTraceRecorder(turn.turn_id)
     final_response = ""
     pending_task = chat_state.get("pending_task")
+    pending_write_plan = chat_state.get("pending_write_plan")
     compliance_passed = True
     settings = get_settings()
     model, provider = _resolve_model_identity(settings)
@@ -330,6 +339,8 @@ async def _generate_stream_events_admitted(
                     compliance_passed = bool(output.get("compliance_passed", True))
                 if "pending_task" in output:
                     pending_task = output.get("pending_task")
+                if "pending_write_plan" in output:
+                    pending_write_plan = output.get("pending_write_plan")
                 if "final_response" in output:
                     final_response = output.get("final_response") or ""
                     for delta in _response_delta_chunks(final_response):
@@ -343,6 +354,13 @@ async def _generate_stream_events_admitted(
                     short_term_memory_service.get_service(),
                     session_id,
                     pending_task,
+                    user_id=user_id or "anonymous",
+                )
+                await asyncio.to_thread(
+                    _persist_pending_write_plan,
+                    short_term_memory_service.get_service(),
+                    session_id,
+                    pending_write_plan,
                     user_id=user_id or "anonymous",
                 )
                 await asyncio.to_thread(

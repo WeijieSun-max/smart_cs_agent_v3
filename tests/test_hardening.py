@@ -164,6 +164,29 @@ def test_pending_task_cache_is_user_scoped_and_detached() -> None:
     assert memory.get_pending_task("session-1", user_id="user-a") is None
 
 
+def test_pending_write_plan_cache_is_user_scoped_and_detached() -> None:
+    memory = RedisShortTermMemory(None)
+    plan = {
+        "schema_version": "1.0",
+        "plan_id": "plan-1",
+        "current_index": 0,
+        "assignments": [
+            {"task_id": "W1", "arguments": {"detail": "应天路88号"}},
+            {"task_id": "W2", "arguments": {}},
+        ],
+    }
+
+    memory.cache_pending_write_plan("session-1", plan, user_id="user-a")
+    loaded = memory.get_pending_write_plan("session-1", user_id="user-a")
+
+    assert loaded == plan
+    assert memory.get_pending_write_plan("session-1", user_id="user-b") is None
+    loaded["assignments"][0]["arguments"]["detail"] = "被修改"
+    assert memory.get_pending_write_plan("session-1", user_id="user-a") == plan
+    memory.delete_pending_write_plan("session-1", user_id="user-a")
+    assert memory.get_pending_write_plan("session-1", user_id="user-a") is None
+
+
 def test_prepare_turn_loads_pending_task_independently_from_history() -> None:
     memory = RedisShortTermMemory(None)
     short_term_memory_service.initialize_service(memory)
@@ -185,6 +208,33 @@ def test_prepare_turn_loads_pending_task_independently_from_history() -> None:
     assert replay is None
     assert state["pending_task"] == task
     assert state["conversation_context"]["recent_messages"] == []
+
+
+def test_prepare_turn_loads_pending_write_plan_independently_from_history() -> None:
+    memory = RedisShortTermMemory(None)
+    short_term_memory_service.initialize_service(memory)
+    plan = {
+        "schema_version": "1.0",
+        "plan_id": "plan-1",
+        "source_turn_id": "turn-1",
+        "current_index": 0,
+        "active_action_id": "action-1",
+        "completed_action_ids": [],
+        "assignments": [
+            {"task_id": "W1", "agent": "telecom_agent", "objective": "变更套餐", "capability": "plan_change", "dependencies": [], "arguments": {}},
+            {"task_id": "W2", "agent": "telecom_agent", "objective": "开启漫游", "capability": "roaming", "dependencies": [], "arguments": {}},
+        ],
+    }
+    memory.cache_pending_write_plan("write-session", plan, user_id="write-user")
+
+    _, state, _, replay = chat_service._prepare_turn(ChatRequest(
+        message="确认",
+        user_id="write-user",
+        session_id="write-session",
+    ))
+
+    assert replay is None
+    assert state["pending_write_plan"] == plan
 
 
 def test_chat_request_rejects_blank_and_oversized_messages() -> None:

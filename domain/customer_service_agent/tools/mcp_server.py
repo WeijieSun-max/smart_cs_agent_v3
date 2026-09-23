@@ -40,6 +40,7 @@ class ToolDefinition:
     risk_level: Literal["low", "medium", "high"] = "low"
     confirmation_policy: ConfirmationPolicy = "never"
     parallel_safe: bool = True
+    requires_prior_read: bool = False
 
 
 @dataclass
@@ -84,6 +85,7 @@ class MCPToolServer:
         risk_level: Literal["low", "medium", "high"] = "low",
         confirmation_policy: ConfirmationPolicy | None = None,
         parallel_safe: bool | None = None,
+        requires_prior_read: bool | None = None,
     ) -> Callable:
         """验证工具元数据和处理器签名，并返回注册装饰器。"""
 
@@ -91,6 +93,8 @@ class MCPToolServer:
             raise ValueError("effect must be 'read' or 'write'")
         if type(supports_idempotency) is not bool:
             raise ValueError("supports_idempotency must be a boolean")
+        if requires_prior_read is not None and type(requires_prior_read) is not bool:
+            raise ValueError("requires_prior_read must be a boolean")
         resolved_confirmation = confirmation_policy or ("always" if effect == "write" else "never")
         if effect == "write" and resolved_confirmation != "always":
             raise ValueError("all write tools require confirmation")
@@ -99,6 +103,13 @@ class MCPToolServer:
         resolved_parallel_safe = effect == "read" if parallel_safe is None else parallel_safe
         if effect == "write" and resolved_parallel_safe:
             raise ValueError("write tools cannot be parallel safe")
+        resolved_requires_prior_read = (
+            effect == "write"
+            if requires_prior_read is None
+            else requires_prior_read
+        )
+        if effect == "read" and resolved_requires_prior_read:
+            raise ValueError("read tools cannot require a prior read")
 
         def decorator(func: Callable[..., Awaitable[Any]]) -> Callable[..., Awaitable[Any]]:
             """冻结处理器及注册时元数据，并拒绝重名工具。"""
@@ -121,6 +132,7 @@ class MCPToolServer:
                 risk_level=risk_level,
                 confirmation_policy=resolved_confirmation,
                 parallel_safe=resolved_parallel_safe,
+                requires_prior_read=resolved_requires_prior_read,
             )
             return func
 
@@ -144,6 +156,7 @@ class MCPToolServer:
                 "riskLevel": tool.risk_level,
                 "confirmationPolicy": tool.confirmation_policy,
                 "parallelSafe": tool.parallel_safe,
+                "requiresPriorRead": tool.requires_prior_read,
             }
             for tool in self._tools.values()
             if category is None or tool.category == category
@@ -170,6 +183,7 @@ class MCPToolServer:
             risk_level=tool.risk_level,
             confirmation_policy=tool.confirmation_policy,
             parallel_safe=tool.parallel_safe,
+            requires_prior_read=tool.requires_prior_read,
         )
 
     def validate_arguments(self, name: str, arguments: dict[str, Any]) -> None:

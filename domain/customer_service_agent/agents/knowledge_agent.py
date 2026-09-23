@@ -18,6 +18,8 @@ _CAPABILITY_DOMAIN = {
 async def run_knowledge_agent(
     assignment: AgentAssignment,
     state: ChatState,
+    *,
+    dependency_results: dict[str, dict[str, Any]] | None = None,
 ) -> AgentResult:
     """执行一次有来源约束的知识任务并转换为统一 AgentResult。
 
@@ -48,11 +50,19 @@ async def run_knowledge_agent(
         "normalized_query": retrieval_query,
     }
     try:
-        update = await retrieve_grounded_answer(
-            child_state,
-            domain,
-            assignment.capability,
-        )
+        if dependency_results:
+            update = await retrieve_grounded_answer(
+                child_state,
+                domain,
+                assignment.capability,
+                dependency_results=dependency_results,
+            )
+        else:
+            update = await retrieve_grounded_answer(
+                child_state,
+                domain,
+                assignment.capability,
+            )
     except Exception as exc:
         error = normalize_error(exc)
         return AgentResult(

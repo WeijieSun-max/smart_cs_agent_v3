@@ -17,34 +17,45 @@ NOW = datetime(2026, 8, 11, tzinfo=timezone.utc)
 class FakeRepository:
     def __init__(self) -> None:
         self.events = [MemoryOutboxEvent(
-            event_type=MemoryOutboxEventType.TURN_COMPLETED,
+            event_type=MemoryOutboxEventType.MEMORY_EXTRACT,
             aggregate_id="turn-1",
             payload={"user_id": "user-1", "session_id": "session-1", "turn_id": "turn-1"},
             available_at=NOW,
             created_at=NOW,
         )]
-        self.completed: list[str] = []
-        self.retried: list[tuple[str, dict]] = []
-        self.applied = []
-
-    def claim_outbox(self, *args, **kwargs):
-        events, self.events = self.events, []
-        return events
-
-    def get_latest_summary(self, user_id, session_id):
-        return None
-
-    def get_messages_after(self, user_id, session_id, after_message_id, limit=1000):
-        return [
+        self.messages = [
             {"message_id": 1, "role": "user", "content": "我偏好稳健产品", "turn_id": "turn-1"},
             {"message_id": 2, "role": "assistant", "content": "已了解", "turn_id": "turn-1"},
         ]
+        self.checkpoint = 0
+        self.latest_summary = None
+        self.completed: list[str] = []
+        self.retried: list[tuple[str, dict]] = []
+        self.applied: list[dict] = []
+        self.apply_result = True
+
+    def claim_outbox(self, event_types, **kwargs):
+        assert event_types == [MemoryOutboxEventType.MEMORY_EXTRACT]
+        events, self.events = self.events, []
+        return events
+
+    def get_extraction_checkpoint(self, user_id, session_id):
+        return self.checkpoint
+
+    def get_latest_summary(self, user_id, session_id):
+        return self.latest_summary
+
+    def get_messages_after(self, user_id, session_id, after_message_id, limit=1000):
+        return [item for item in self.messages if item["message_id"] > after_message_id]
 
     def find_active_by_key(self, user_id, memory_type, memory_key):
         return None
 
-    def apply_extraction(self, summary, items, sources, superseded_ids):
-        self.applied.append((summary, items, sources, superseded_ids))
+    def apply_memory_extraction(self, **kwargs):
+        self.applied.append(kwargs)
+        if self.apply_result:
+            self.checkpoint = kwargs["last_message_id"]
+        return self.apply_result
 
     def complete_outbox(self, event_id, processed_at):
         self.completed.append(str(event_id))
@@ -53,152 +64,92 @@ class FakeRepository:
         self.retried.append((str(event_id), kwargs))
 
 
-def test_worker_applies_summary_and_memory_once() -> None:
-    repository = FakeRepository()
-    summary = SessionSummary(
-        user_id="user-1",
-        session_id="session-1",
-        version=1,
-        summary_text="用户偏好稳健产品",
-        structured_data={},
-        covers_until_message_id=2,
-        created_at=NOW,
-        updated_at=NOW,
-    )
-    summary_service = SimpleNamespace(build=lambda **kwargs: summary)
-    extraction_service = SimpleNamespace(extract=lambda **kwargs: [MemoryCandidate(
+def _candidate() -> MemoryCandidate:
+    return MemoryCandidate(
         memory_type=MemoryType.PREFERENCE,
         memory_key="preference.risk",
         content="用户偏好稳健产品",
         confidence=0.9,
-    )])
-    cached = []
-    summary_cache = SimpleNamespace(cache_session_summary=lambda session_id, value: cached.append((session_id, value)))
+    )
+
+
+def test_worker_extracts_memory_and_advances_independent_checkpoint() -> None:
+    repository = FakeRepository()
+    captured = {}
+
+    def extract(**kwargs):
+        captured.update(kwargs)
+        return [_candidate()]
+
     worker = MemoryExtractionWorker(
         repository,
-        summary_service,
-        extraction_service,
+        SimpleNamespace(extract=extract),
         worker_id="worker-1",
-        summary_cache=summary_cache,
     )
 
     assert worker.run_once(now=NOW) == 1
+    assert len(repository.applied) == 1
+    applied = repository.applied[0]
+    assert applied["expected_last_message_id"] == 0
+    assert applied["last_message_id"] == 2
+    assert len(applied["items"]) == 1
+    assert captured["summary_text"] == ""
+    assert repository.checkpoint == 2
+    assert len(repository.completed) == 1
+
+
+def test_worker_can_use_latest_summary_without_waiting_for_summary_update() -> None:
+    repository = FakeRepository()
+    repository.latest_summary = SessionSummary(
+        user_id="user-1",
+        session_id="session-1",
+        version=1,
+        summary_text="已有摘要",
+        structured_data={},
+        covers_until_message_id=1,
+        created_at=NOW,
+        updated_at=NOW,
+    )
+    captured = {}
+    worker = MemoryExtractionWorker(
+        repository,
+        SimpleNamespace(extract=lambda **kwargs: captured.update(kwargs) or []),
+    )
+
+    assert worker.run_once(now=NOW) == 1
+    assert captured["summary_text"] == "已有摘要"
+    assert repository.applied[0]["items"] == []
+    assert repository.checkpoint == 2
+
+
+def test_worker_waits_until_extraction_turn_threshold() -> None:
+    repository = FakeRepository()
+    worker = MemoryExtractionWorker(
+        repository,
+        SimpleNamespace(extract=lambda **kwargs: (_ for _ in ()).throw(
+            AssertionError("extraction must not run")
+        )),
+        extraction_increment_turns=2,
+    )
+
+    assert worker.run_once(now=NOW) == 1
+    assert repository.applied == []
+    assert repository.checkpoint == 0
+    assert len(repository.completed) == 1
+
+
+def test_worker_retries_checkpoint_conflict_without_duplicate_write() -> None:
+    repository = FakeRepository()
+    repository.apply_result = False
+    worker = MemoryExtractionWorker(
+        repository,
+        SimpleNamespace(extract=lambda **kwargs: []),
+    )
+
     assert worker.run_once(now=NOW) == 0
     assert len(repository.applied) == 1
-    assert len(repository.applied[0][1]) == 1
-    assert len(repository.completed) == 1
-    assert cached[0][0] == "session-1"
-    assert cached[0][1]["version"] == 1
-
-
-def test_worker_completes_event_without_summary_before_threshold() -> None:
-    repository = FakeRepository()
-    summary_service = SimpleNamespace(
-        build=lambda **kwargs: (_ for _ in ()).throw(AssertionError("summary must not run"))
-    )
-    worker = MemoryExtractionWorker(
-        repository,
-        summary_service,
-        SimpleNamespace(extract=lambda **kwargs: []),
-        summary_eligible_turns=2,
-    )
-
-    assert worker.run_once(now=NOW) == 1
-    assert repository.applied == []
-    assert len(repository.completed) == 1
-
-
-class ExistingSummaryRepository(FakeRepository):
-    def __init__(self, messages: list[dict]) -> None:
-        super().__init__()
-        self.messages = messages
-        self.latest_summary = SessionSummary(
-            user_id="user-1",
-            session_id="session-1",
-            version=1,
-            summary_text="existing summary",
-            structured_data={},
-            covers_until_message_id=2,
-            created_at=NOW,
-            updated_at=NOW,
-        )
-
-    def get_latest_summary(self, user_id, session_id):
-        return self.latest_summary
-
-    def get_messages_after(self, user_id, session_id, after_message_id, limit=1000):
-        return self.messages
-
-
-def test_worker_waits_for_increment_turns_when_character_trigger_is_disabled() -> None:
-    repository = ExistingSummaryRepository([
-        {"message_id": 3, "role": "user", "content": "one new turn", "turn_id": "turn-1"},
-        {"message_id": 4, "role": "assistant", "content": "acknowledged", "turn_id": "turn-1"},
-    ])
-    summary_service = SimpleNamespace(
-        build=lambda **kwargs: (_ for _ in ()).throw(AssertionError("summary must not run"))
-    )
-    worker = MemoryExtractionWorker(
-        repository,
-        summary_service,
-        SimpleNamespace(extract=lambda **kwargs: []),
-        summary_increment_turns=8,
-        summary_increment_chars=0,
-    )
-
-    assert worker.run_once(now=NOW) == 1
-    assert repository.applied == []
-    assert len(repository.completed) == 1
-
-
-def test_worker_runs_at_increment_turn_threshold_when_character_trigger_is_disabled() -> None:
-    messages = [
-        {
-            "message_id": index + 3,
-            "role": "user",
-            "content": f"update {index}",
-            "turn_id": f"turn-{index}",
-        }
-        for index in range(8)
-    ]
-    repository = ExistingSummaryRepository(messages)
-    next_summary = repository.latest_summary.model_copy(update={
-        "version": 2,
-        "summary_text": "updated summary",
-        "covers_until_message_id": 10,
-    })
-    worker = MemoryExtractionWorker(
-        repository,
-        SimpleNamespace(build=lambda **kwargs: next_summary),
-        SimpleNamespace(extract=lambda **kwargs: []),
-        summary_increment_turns=8,
-        summary_increment_chars=0,
-    )
-
-    assert worker.run_once(now=NOW) == 1
-    assert len(repository.applied) == 1
-
-
-def test_worker_allows_character_threshold_to_trigger_before_increment_turns() -> None:
-    repository = ExistingSummaryRepository([
-        {"message_id": 3, "role": "user", "content": "long enough update", "turn_id": "turn-1"},
-        {"message_id": 4, "role": "assistant", "content": "acknowledged", "turn_id": "turn-1"},
-    ])
-    next_summary = repository.latest_summary.model_copy(update={
-        "version": 2,
-        "summary_text": "updated summary",
-        "covers_until_message_id": 4,
-    })
-    worker = MemoryExtractionWorker(
-        repository,
-        SimpleNamespace(build=lambda **kwargs: next_summary),
-        SimpleNamespace(extract=lambda **kwargs: []),
-        summary_increment_turns=8,
-        summary_increment_chars=5,
-    )
-
-    assert worker.run_once(now=NOW) == 1
-    assert len(repository.applied) == 1
+    assert repository.completed == []
+    assert len(repository.retried) == 1
 
 
 def test_worker_passes_retry_limit_for_dead_letter_transition() -> None:
@@ -206,8 +157,7 @@ def test_worker_passes_retry_limit_for_dead_letter_transition() -> None:
     repository.events[0] = repository.events[0].model_copy(update={"attempts": 4})
     worker = MemoryExtractionWorker(
         repository,
-        SimpleNamespace(build=lambda **kwargs: (_ for _ in ()).throw(ValueError("bad"))),
-        SimpleNamespace(extract=lambda **kwargs: []),
+        SimpleNamespace(extract=lambda **kwargs: (_ for _ in ()).throw(ValueError("bad"))),
         max_attempts=5,
     )
 
@@ -218,9 +168,11 @@ def test_worker_passes_retry_limit_for_dead_letter_transition() -> None:
 
 def test_worker_retries_failed_extraction_without_writing() -> None:
     repository = FakeRepository()
-    summary_service = SimpleNamespace(build=lambda **kwargs: (_ for _ in ()).throw(ValueError("bad summary")))
-    extraction_service = SimpleNamespace(extract=lambda **kwargs: [])
-    worker = MemoryExtractionWorker(repository, summary_service, extraction_service, worker_id="worker-1")
+    worker = MemoryExtractionWorker(
+        repository,
+        SimpleNamespace(extract=lambda **kwargs: (_ for _ in ()).throw(ValueError("bad extraction"))),
+        worker_id="worker-1",
+    )
 
     assert worker.run_once(now=NOW) == 0
     assert repository.applied == []

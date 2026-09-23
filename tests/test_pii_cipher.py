@@ -61,3 +61,51 @@ def test_mysql_address_cipher_is_decrypted_only_at_business_boundary() -> None:
     assert result["address"]["phone"] == "18060815554"
     assert result["address"]["detail"] == "南京路88号"
     assert not any(key.endswith("_cipher") for key in result["address"])
+
+
+def test_mysql_high_level_address_write_reuses_contact_inside_transaction() -> None:
+    recipient_cipher = encrypt_pii("苏军")
+    phone_cipher = encrypt_pii("15588697856")
+
+    class Cursor:
+        def __init__(self) -> None:
+            self.statements = []
+
+        def execute(self, sql, args=None):
+            self.statements.append((sql, args))
+            return 1
+
+        def fetchall(self):
+            return [{
+                "recipient_cipher": recipient_cipher,
+                "phone_cipher": phone_cipher,
+            }]
+
+    cursor = Cursor()
+    store = MySQLBusinessStore(None)
+
+    receipt = store._execute_with_cursor(
+        cursor,
+        "retail_create_address_reusing_default_contact",
+        {
+            "province": "北京市",
+            "city": "北京市",
+            "district": "朝阳区",
+            "detail": "应天路88号",
+            "set_default": True,
+        },
+        "u1",
+        "action-1",
+    )
+
+    assert "FOR UPDATE" in cursor.statements[0][0]
+    insert = next(
+        args
+        for sql, args in cursor.statements
+        if "INSERT INTO cs_user_addresses" in sql
+    )
+    assert insert[3] == recipient_cipher
+    assert insert[4] == phone_cipher
+    assert receipt["summary"]["recipient"] == "苏军"
+    assert receipt["summary"]["phone"] == "15588697856"
+    assert receipt["summary"]["full_address"] == "北京市朝阳区应天路88号"

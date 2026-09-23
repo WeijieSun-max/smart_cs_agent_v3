@@ -11,7 +11,7 @@ FastAPI + LangGraph 的模块化单体，面向移联电信与商城客服。MyS
 - `retail-order-assistance` 负责本人订单历史、日期/商品/状态筛选、候选消歧和详情查询，并将工具权限收紧为只读订单工具。
 - Telecom：套餐/使用量查询、套餐变更、流量补充、漫游；通信故障永久为带文档版本和引用的 RAG 指导，不存在设备 adapter。
 - Retail：完整地址/联系电话查询、新增地址并设为默认、支付方式、商品/库存、订单、取消、地址/支付/商品修改、退货、换货、差价退款。
-- 所有业务数据库写操作统一进入 governed action：两次 active 用户查询、资源版本、冻结参数摘要、二次确认、幂等事务、回读回执及未知状态对账。
+- 所有业务数据库写操作统一进入 governed action：两次 active 用户查询、资源版本、冻结参数摘要、二次确认、幂等事务、回读回执及未知状态对账。复合请求中的多个写意图按用户表达顺序保存为 `pending_write_plan`，同一会话仅保留一个活跃提案；前一项确认成功后，下一项重新进入领域 Agent 读取最新状态并生成独立确认提案。
 - MySQL durable LangGraph checkpoint、跨进程会话租约与 fencing token；单 worker 默认 8 个活跃回合、32 个排队请求，同一用户会话严格串行。
 - 同步后台任务与异步 Web 节点共享全局 LLM 20 并发、40 排队容量和节点级 Model Profile。
 - 四层记忆、20-turn + 增量阈值异步摘要、类型化 TTL、Qdrant 删除 outbox。
@@ -40,7 +40,7 @@ Supervisor 在当前轮的 `HumanMessage` JSON 载荷中读取完整对象，并
 
 领域 Agent 返回 `needs_clarification` 时，原 assignment 会作为用户/会话隔离的 `pending_task` 写入短期缓存。下一轮 Supervisor 同时读取当前回复和该结构化任务，合并已知目标与新增槽位；任务完成或转为待确认治理动作后自动清理。该机制独立于自然语言历史和摘要 token 裁剪。
 
-普通业务请求均由 Supervisor LLM 做语义判断，不存在关键词或正则快速路由；唯一例外是当前会话已有 governed action 时，无歧义的规范“确认/取消”命令直接进入治理状态机，带有额外业务文本的表达仍由 Supervisor 判断。`knowledge_agent` 统一承接通信故障、零售政策等非结构化 RAG；Telecom/Retail Agent 自主生成结构化工具调用。`retail_get_default_address` 可读取当前用户完整默认地址联系人；只修改默认地址位置时，Retail Agent 沿用该实时结果，无需用户重复提供姓名和电话。无依赖 Agent 任务可并行；单个领域 Agent 也可在一次结构化决策中并行执行最多 3 个声明为 `parallel_safe` 的独立只读工具。每批最多一个写任务，Agent 只能生成冻结提案，用户确认后才由 governed action 执行。最终合规节点是所有路径的必经出口。
+普通业务请求均由 Supervisor LLM 做语义判断，不存在关键词或正则快速路由；唯一例外是当前会话已有 governed action 时，无歧义的规范“确认/取消”命令直接进入治理状态机，带有额外业务文本的表达仍由 Supervisor 判断。`knowledge_agent` 统一承接通信故障、零售政策等非结构化 RAG；Telecom/Retail Agent 自主生成结构化工具调用。`retail_get_default_address` 可读取当前用户完整默认地址联系人；只修改默认地址位置时，Retail Agent 沿用该实时结果，无需用户重复提供姓名和电话。无依赖 Agent 任务可并行；单个领域 Agent 也可在一次结构化决策中并行执行最多 3 个声明为 `parallel_safe` 的独立只读工具。多个写意图可由 Supervisor 一次识别，但运行时按 `pending_write_plan` 串行放行，每次只允许一个 Agent 生成冻结提案；用户确认成功后，下一项重新读取业务状态并再次请求确认。最终合规节点是所有路径的必经出口。
 
 ## 目录
 

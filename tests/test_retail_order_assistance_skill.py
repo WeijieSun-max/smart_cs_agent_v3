@@ -18,6 +18,13 @@ from domain.shared.identity import RequestIdentityContext
 from domain.shared.llm.llm_service import initialize_llm_client
 
 
+class ToolBindingFakeListChatModel(FakeListChatModel):
+    """LangChain deterministic fake with no-op native tool binding."""
+
+    def bind_tools(self, _tools, **_kwargs):
+        return self
+
+
 SKILLS_ROOT = Path(__file__).parents[1] / "skills"
 SKILL_ROOT = SKILLS_ROOT / "retail" / "order-assistance"
 
@@ -136,7 +143,7 @@ def test_retail_agent_loads_skill_prompt_and_restricts_tool_whitelist(monkeypatc
 def test_supervisor_runs_retail_order_skill_end_to_end(run_supervisor) -> None:
     _setup_platform()
     initialize_catalog(SKILLS_ROOT, get_mcp_server())
-    initialize_llm_client(FakeListChatModel(responses=[
+    initialize_llm_client(ToolBindingFakeListChatModel(responses=[
         '{"action":"dispatch","standalone_query":"查询最近购买的商品",'
         '"assignments":[{"task_id":"R1","agent":"retail_agent",'
         '"objective":"按时间倒序查询当前用户最近订单和商品",'

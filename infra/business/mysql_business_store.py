@@ -251,7 +251,30 @@ class MySQLBusinessStore:
             else: raise StorageOperationError()
             return {"status":"succeeded","resource_type":"line","resource_id":args["line_id"],"version_before":before,"version_after":before+1,"summary":summary}
 
-        if tool_name == "retail_create_address":
+        if tool_name in {
+            "retail_create_address",
+            "retail_create_address_reusing_default_contact",
+        }:
+            recipient = args.get("recipient")
+            phone = args.get("phone")
+            recipient_cipher = None
+            phone_cipher = None
+            if tool_name == "retail_create_address_reusing_default_contact":
+                cursor.execute(
+                    "SELECT recipient_cipher,phone_cipher FROM cs_user_addresses "
+                    "WHERE user_id=%s AND status='active' AND is_default=TRUE "
+                    "LIMIT 2 FOR UPDATE",
+                    (user_id,),
+                )
+                defaults = cursor.fetchall()
+                if len(defaults) != 1:
+                    raise RequestConflictError()
+                recipient_cipher = defaults[0].get("recipient_cipher")
+                phone_cipher = defaults[0].get("phone_cipher")
+                recipient = decrypt_pii(recipient_cipher)
+                phone = decrypt_pii(phone_cipher)
+            if not isinstance(recipient, str) or not recipient or not isinstance(phone, str) or not phone:
+                raise RequestConflictError()
             address_id = uuid4().hex[:26]
             set_default = bool(args["set_default"])
             if set_default:
@@ -269,8 +292,8 @@ class MySQLBusinessStore:
                     address_id,
                     user_id,
                     args.get("label") or "默认收货地址",
-                    encrypt_pii(args["recipient"]),
-                    encrypt_pii(args["phone"]),
+                    recipient_cipher or encrypt_pii(recipient),
+                    phone_cipher or encrypt_pii(phone),
                     args["province"],
                     args["city"],
                     args["district"],
@@ -287,8 +310,8 @@ class MySQLBusinessStore:
                 "version_after": 1,
                 "summary": {
                     "label": args.get("label") or "默认收货地址",
-                    "recipient": args["recipient"],
-                    "phone": args["phone"],
+                    "recipient": recipient,
+                    "phone": phone,
                     "full_address": _format_full_address(args),
                     "is_default": set_default,
                 },

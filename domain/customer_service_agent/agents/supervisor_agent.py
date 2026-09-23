@@ -19,6 +19,7 @@ from domain.customer_service_agent.orchestration.capability_index import (
 from domain.customer_service_agent.orchestration.models import (
     AgentAssignment,
     AgentResult,
+    PendingWritePlan,
     SupervisorDecision,
 )
 from domain.customer_service_agent.workflow.entity.chat_state import ChatState
@@ -44,7 +45,7 @@ _SUPERVISOR_SYSTEM_PROMPT = """你是电信与零售客服系统的管理者 Sup
 2. 需要业务事实时必须 dispatch，不得自行编造数据库事实。
 3. 可并行的独立任务放在同一批 assignments；有依赖时填写 dependencies。
 4. 每个 assignment 只能使用所属 Agent 的可路由 capability。
-5. 每一批最多包含一个写能力。写操作只生成待确认提案，不能声称已执行。
+5. 一个用户请求包含多个写意图时，按用户表达顺序把所有写任务放入 assignments；系统会将其保存为有序计划，每次只放行一个写任务。每个写操作只生成待确认提案，不能声称已执行，也不能复用前一项的确认。
 6. 有待确认动作时禁止调度新业务：明确同意用 confirm_action，明确拒绝用 reject_action；无关或含糊表达用 clarify。
 7. 已有结果足以回答时用 finish，并只依据结果组织 response。信息不足时用 clarify。
 8. 相对日期应结合 current_date 转换成明确日期，放入 objective 或 arguments。ID、金额、数量、布尔值必须保持结构化类型；不得发明 ID。
@@ -54,6 +55,7 @@ _SUPERVISOR_SYSTEM_PROMPT = """你是电信与零售客服系统的管理者 Sup
 12. 每个 assignment 必须是可独立执行的完整任务。领域子 Agent 不读取全局对话历史，因此必须把已消解的目标、用户本轮提供的参数以及 active_pending_task 中仍有效的已知参数写入 objective/arguments。
 13. active_pending_task 表示上一轮等待用户补充的任务。若 current_query 正在回答该任务，合并新信息与原 assignment，保留其中已有目标和参数，不得因当前回复较短而丢失原任务。
 14. 当前用户有权读取的联系人可由零售工具返回。不得声称因隐私或加密而无法使用；用户要求沿用默认地址联系人，或只修改默认地址位置而未明确更换联系人时，在 assignment.arguments 中设置 contact_strategy="reuse_current_default"。
+15. active_pending_write_plan 表示已进入逐项确认流程的写计划。没有 active_pending_action 时，只能续接其中的 current_assignment，不得插入新的写任务；该任务仍必须重新查询实时业务状态后才能生成提案。
 
 JSON 格式：
 {
@@ -100,6 +102,9 @@ async def decide_next_step(
         "max_rounds": MAX_SUPERVISOR_ROUNDS,
         "dispatch_allowed": allow_dispatch,
         "active_pending_action": active_action,
+        "active_pending_write_plan": _write_plan_payload(
+            state.get("pending_write_plan")
+        ),
         "available_capabilities": _capability_catalog(),
         "completed_results": _public_results(state),
         "active_pending_task": state.get("pending_task"),
@@ -185,7 +190,7 @@ def _validate_decision(
         raise ValueError("task ids must be unique across rounds")
     known_ids = set(ids) | set(completed_task_ids)
     write_capabilities = get_capability_index().write_capabilities
-    write_count = 0
+    write_task_ids: set[str] = set()
     for assignment in decision.assignments:
         if assignment.capability not in catalog[assignment.agent]:
             raise ValueError("capability is not owned by assigned agent")
@@ -194,10 +199,31 @@ def _validate_decision(
         if assignment.task_id in assignment.dependencies:
             raise ValueError("assignment cannot depend on itself")
         if assignment.capability in write_capabilities:
-            write_count += 1
-    if write_count > 1:
-        raise ValueError("only one write assignment is allowed per dispatch")
+            write_task_ids.add(assignment.task_id)
+    if len(write_task_ids) > 1:
+        for assignment in decision.assignments:
+            if write_task_ids.intersection(assignment.dependencies):
+                raise ValueError(
+                    "multi-write plans cannot depend on another write assignment"
+                )
     _validate_dependency_graph(decision.assignments, completed_task_ids)
+
+
+def _write_plan_payload(value: Any) -> dict[str, Any] | None:
+    """Expose only the current queued intent; later writes remain order metadata."""
+
+    try:
+        plan = PendingWritePlan.model_validate(value)
+    except (ValidationError, TypeError):
+        return None
+    return {
+        "plan_id": plan.plan_id,
+        "current_index": plan.current_index,
+        "total_items": len(plan.assignments),
+        "remaining_items": plan.remaining_count,
+        "current_assignment": plan.current_assignment.model_dump(mode="json"),
+        "active_action_id": plan.active_action_id,
+    }
 
 
 def _validate_dependency_graph(

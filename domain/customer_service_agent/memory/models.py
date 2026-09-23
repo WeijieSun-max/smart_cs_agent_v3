@@ -38,7 +38,8 @@ class MemoryStatus(StrEnum):
 class MemoryOutboxEventType(StrEnum):
     """权威事务提交后需要异步执行的记忆副作用类型。"""
 
-    TURN_COMPLETED = "turn_completed"
+    MEMORY_EXTRACT = "memory_extract"
+    SUMMARY_UPDATE = "summary_update"
     INDEX_UPSERT = "index_upsert"
     INDEX_DELETE = "index_delete"
 

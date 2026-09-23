@@ -3,11 +3,18 @@ from __future__ import annotations
 import asyncio
 import json
 
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+
 from domain.action_governance import GovernedActionService, initialize_action_service
 from domain.business.service import initialize_service
 from domain.business.store import InMemoryBusinessStore
 from domain.customer_service_agent.agents import knowledge_agent, supervisor_agent, tool_agent
-from domain.customer_service_agent.orchestration.models import AgentAssignment, AgentResult
+from domain.customer_service_agent.orchestration.models import (
+    AgentAssignment,
+    AgentResult,
+    PendingWritePlan,
+    SupervisorDecision,
+)
 from domain.customer_service_agent.orchestration.pending_action_resolver import _action_result_text
 from domain.customer_service_agent.tools.tool_registry import get_mcp_server
 from domain.customer_service_agent.workflow.entity.chat_state import create_chat_state
@@ -163,17 +170,25 @@ def test_retail_agent_reuses_current_default_contact_without_asking_again(monkey
         "version": 3,
     }])
     captured_messages = []
+    captured_tools = []
     responses = iter([
-        Response(
-            '{"action":"propose_write","tool_name":"retail_create_address",'
-            '"arguments":{"province":"北京市","city":"北京市","district":"朝阳区",'
-            '"detail":"应天路88号","set_default":true},'
-            '"impact_summary":"沿用当前默认联系人，创建北京地址并设为默认地址"}'
-        ),
+        AIMessage(content="", tool_calls=[{
+            "id": "call-create-reusing-contact",
+            "name": "retail_create_address_reusing_default_contact",
+            "args": {
+                "province": "北京市",
+                "city": "北京市",
+                "district": "朝阳区",
+                "detail": "应天路88号",
+                "set_default": True,
+                "impact_summary": "沿用当前默认联系人，创建北京地址并设为默认地址",
+            },
+        }]),
     ])
 
-    def invoke(messages, **_kwargs):
+    def invoke(messages, **kwargs):
         captured_messages.append(messages)
+        captured_tools.append(kwargs["tools"])
         return next(responses)
 
     monkeypatch.setattr(tool_agent, "invoke_llm", invoke)
@@ -192,9 +207,24 @@ def test_retail_agent_reuses_current_default_contact_without_asking_again(monkey
     ))
 
     assert result.status == "needs_confirmation"
-    first_payload = json.loads(captured_messages[0][-1].content)
-    assert first_payload["observations"][0]["tool_name"] == "retail_get_default_address"
-    assert first_payload["observations"][0]["result"]["address"]["recipient"] == "苏军"
+    assignment_payload = json.loads(captured_messages[0][1].content)
+    assert assignment_payload["type"] == "agent_assignment"
+    assert "observations" not in assignment_payload
+    assert len(captured_messages[0]) == 2
+    exposed_names = {
+        item["function"]["name"]
+        for item in captured_tools[0]
+    }
+    assert "retail_create_address_reusing_default_contact" in exposed_names
+    assert "retail_create_address" not in exposed_names
+    assert "retail_get_default_address" not in exposed_names
+    proposal = result.facts["proposal"]
+    assert proposal["tool_name"] == "retail_create_address_reusing_default_contact"
+    assert proposal["tool_call_id"] == "call-create-reusing-contact"
+    pending = actions.get_active(_identity())
+    assert pending is not None
+    assert "recipient" not in pending.arguments
+    assert "phone" not in pending.arguments
     completed = asyncio.run(actions.confirm(_identity()))
     assert completed.status == "succeeded"
     assert completed.receipt["summary"]["full_address"] == "北京市朝阳区应天路88号"
@@ -237,7 +267,7 @@ def test_default_address_recognizes_mysql_tinyint_flag() -> None:
     assert result["address"]["address_id"] == "A-mysql-bool"
 
 
-def test_retail_agent_repairs_nested_missing_fields_and_reuses_default_contact(monkeypatch) -> None:
+def test_retail_agent_uses_high_level_tool_for_nested_default_address_change(monkeypatch) -> None:
     store, actions = _platform(addresses=[{
         "address_id": "A1",
         "user_id": "u1",
@@ -253,17 +283,18 @@ def test_retail_agent_repairs_nested_missing_fields_and_reuses_default_contact(m
         "version": 3,
     }])
     responses = iter([
-        Response(
-            '{"action":"clarify","tool_name":null,'
-            '"arguments":{"missing_fields":["recipient","phone"]},'
-            '"response":"请提供收件人和电话。","impact_summary":null}'
-        ),
-        Response(
-            '{"action":"propose_write","tool_name":"retail_create_address",'
-            '"arguments":{"province":"河南省","city":"郑州市","district":"二七区",'
-            '"detail":"南京路88号","set_default":true},'
-            '"impact_summary":"沿用当前默认联系人，创建郑州地址并设为默认地址"}'
-        ),
+        AIMessage(content="", tool_calls=[{
+            "id": "call-nested-address",
+            "name": "retail_create_address_reusing_default_contact",
+            "args": {
+                "province": "河南省",
+                "city": "郑州市",
+                "district": "二七区",
+                "detail": "南京路88号",
+                "set_default": True,
+                "impact_summary": "沿用当前默认联系人，创建郑州地址并设为默认地址",
+            },
+        }]),
     ])
     monkeypatch.setattr(tool_agent, "invoke_llm", lambda *_args, **_kwargs: next(responses))
     assignment = AgentAssignment(
@@ -271,7 +302,10 @@ def test_retail_agent_repairs_nested_missing_fields_and_reuses_default_contact(m
         agent="retail_agent",
         objective="将默认地址改为河南省郑州市二七区南京路88号",
         capability="default_address",
-        arguments={"address_line": "河南省郑州市二七区南京路88号"},
+        arguments={
+            "address_line": "河南省郑州市二七区南京路88号",
+            "contact_strategy": "reuse_current_default",
+        },
     )
 
     result = asyncio.run(tool_agent.run_tool_agent(
@@ -380,6 +414,232 @@ def test_exact_cancellation_with_punctuation_bypasses_supervisor_llm(monkeypatch
     assert store.get_owned("lines", "L1", "u1")["current_plan_id"] == "P1"
 
 
+def test_multiple_write_assignments_are_queued_and_only_first_is_released(monkeypatch) -> None:
+    _platform()
+
+    async def decide(*_args, **_kwargs):
+        return SupervisorDecision(
+            action="dispatch",
+            standalone_query="变更套餐后开启漫游",
+            assignments=(
+                AgentAssignment(
+                    task_id="W1",
+                    agent="telecom_agent",
+                    objective="将线路 L1 变更为套餐 P2",
+                    capability="plan_change",
+                    arguments={"line_id": "L1", "plan_id": "P2"},
+                ),
+                AgentAssignment(
+                    task_id="W2",
+                    agent="telecom_agent",
+                    objective="为线路 L1 开启漫游",
+                    capability="roaming",
+                    arguments={"line_id": "L1", "enabled": True},
+                ),
+            ),
+            confidence=0.99,
+        )
+
+    monkeypatch.setattr(supervisor_graph_nodes, "decide_next_step", decide)
+    state = create_chat_state("u1", "multi-write", "变更套餐后开启漫游", turn_id="source-turn")
+
+    update = asyncio.run(supervisor_graph_nodes.supervisor_manager_node(state))
+    plan = PendingWritePlan.model_validate(update["pending_write_plan"])
+
+    assert [item["task_id"] for item in update["agent_assignments"]] == ["W1"]
+    assert [item.task_id for item in plan.assignments] == ["W1", "W2"]
+    assert plan.current_index == 0
+    assert plan.active_action_id is None
+
+
+def test_successful_confirmation_revalidates_and_proposes_next_queued_write(monkeypatch) -> None:
+    store, actions = _platform()
+    identity = _identity("multi-write")
+    first_action = actions.propose_write(
+        "telecom_change_plan",
+        {"line_id": "L1", "plan_id": "P2", "expected_version": 1},
+        identity,
+        impact_summary="将线路 L1 变更为套餐 P2",
+    )
+    plan = PendingWritePlan(
+        plan_id="plan-1",
+        source_turn_id="source-turn",
+        assignments=(
+            AgentAssignment(
+                task_id="W1",
+                agent="telecom_agent",
+                objective="将线路 L1 变更为套餐 P2",
+                capability="plan_change",
+            ),
+            AgentAssignment(
+                task_id="W2",
+                agent="telecom_agent",
+                objective="为线路 L1 开启漫游",
+                capability="roaming",
+                arguments={"line_id": "L1", "enabled": True},
+            ),
+        ),
+        active_action_id=first_action.action_id,
+    )
+    state = create_chat_state(
+        "u1",
+        "multi-write",
+        "确认",
+        turn_id="confirmation-turn-1",
+        pending_write_plan=plan.model_dump(mode="json"),
+    )
+
+    state.update(asyncio.run(supervisor_graph_nodes.supervisor_manager_node(state)))
+    state.update(asyncio.run(supervisor_graph_nodes.pending_action_execution_node(state)))
+    assert store.get_owned("lines", "L1", "u1")["current_plan_id"] == "P2"
+    assert state["continue_write_plan"] is True
+    assert state["agent_assignments"][0]["task_id"] == "W2"
+    advanced = PendingWritePlan.model_validate(state["pending_write_plan"])
+    assert advanced.current_index == 1
+    assert advanced.active_action_id is None
+
+    async def propose_next(assignment, _state, current_identity):
+        # The first action incremented the line version.  The next proposal is
+        # therefore built from a fresh version rather than the original plan.
+        current = store.get_owned("lines", "L1", "u1")
+        assert current["version"] == 2
+        next_action = actions.propose_write(
+            "telecom_set_roaming",
+            {
+                "line_id": "L1",
+                "enabled": True,
+                "expected_version": current["version"],
+            },
+            current_identity,
+            impact_summary="为线路 L1 开启漫游",
+        )
+        return AgentResult(
+            task_id=assignment.task_id,
+            agent=assignment.agent,
+            status="needs_confirmation",
+            pending_action_id=next_action.action_id,
+            user_fragment="待确认：为线路 L1 开启漫游。",
+        )
+
+    monkeypatch.setattr(supervisor_graph_nodes, "_execute_assignment", propose_next)
+    state.update(asyncio.run(supervisor_graph_nodes.domain_dispatch_node(state)))
+    rebound = PendingWritePlan.model_validate(state["pending_write_plan"])
+
+    assert rebound.active_action_id
+    assert "操作已完成" in state["supervisor_response"]
+    assert "开启漫游" in state["supervisor_response"]
+    assert store.get_owned("lines", "L1", "u1")["roaming_enabled"] is False
+
+    final_state = create_chat_state(
+        "u1",
+        "multi-write",
+        "确认",
+        turn_id="confirmation-turn-2",
+        pending_write_plan=rebound.model_dump(mode="json"),
+    )
+    final_state.update(asyncio.run(supervisor_graph_nodes.supervisor_manager_node(final_state)))
+    final_state.update(asyncio.run(supervisor_graph_nodes.pending_action_execution_node(final_state)))
+
+    assert store.get_owned("lines", "L1", "u1")["roaming_enabled"] is True
+    assert final_state["pending_write_plan"] is None
+    assert final_state["continue_write_plan"] is False
+
+
+def test_rejecting_current_write_stops_remaining_plan() -> None:
+    store, actions = _platform()
+    first_action = actions.propose_write(
+        "telecom_change_plan",
+        {"line_id": "L1", "plan_id": "P2", "expected_version": 1},
+        _identity("multi-write-reject"),
+        impact_summary="将线路 L1 变更为套餐 P2",
+    )
+    plan = PendingWritePlan(
+        plan_id="plan-reject",
+        source_turn_id="source-turn",
+        assignments=(
+            AgentAssignment(task_id="W1", agent="telecom_agent", objective="变更套餐", capability="plan_change"),
+            AgentAssignment(task_id="W2", agent="telecom_agent", objective="开启漫游", capability="roaming"),
+        ),
+        active_action_id=first_action.action_id,
+    )
+    state = create_chat_state(
+        "u1",
+        "multi-write-reject",
+        "取消",
+        turn_id="reject-turn",
+        pending_write_plan=plan.model_dump(mode="json"),
+    )
+
+    state.update(asyncio.run(supervisor_graph_nodes.supervisor_manager_node(state)))
+    state.update(asyncio.run(supervisor_graph_nodes.pending_action_execution_node(state)))
+
+    assert state["pending_write_plan"] is None
+    assert state["continue_write_plan"] is False
+    assert "剩余 1 项写操作已停止" in state["supervisor_response"]
+    assert store.get_owned("lines", "L1", "u1")["current_plan_id"] == "P1"
+
+
+def test_same_request_confirmation_cannot_approve_newly_created_next_action(monkeypatch) -> None:
+    _store, actions = _platform()
+    actions.propose_write(
+        "telecom_set_roaming",
+        {"line_id": "L1", "enabled": True, "expected_version": 1},
+        RequestIdentityContext(user_id="u1", session_id="retry-guard", turn_id="same-turn"),
+        impact_summary="为线路 L1 开启漫游",
+    )
+    monkeypatch.setattr(
+        supervisor_agent,
+        "invoke_llm",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("same-turn confirmation must be blocked deterministically")
+        ),
+    )
+    state = create_chat_state(
+        "u1",
+        "retry-guard",
+        "确认",
+        turn_id="same-turn",
+    )
+
+    update = asyncio.run(supervisor_graph_nodes.supervisor_manager_node(state))
+
+    assert update["supervisor_decision"]["action"] == "clarify"
+    assert "新的消息" in update["supervisor_response"]
+
+
+def test_exact_cancel_stops_write_plan_waiting_for_clarification(monkeypatch) -> None:
+    _platform()
+    monkeypatch.setattr(
+        supervisor_agent,
+        "invoke_llm",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("exact plan cancellation must be deterministic")
+        ),
+    )
+    plan = PendingWritePlan(
+        plan_id="plan-clarify",
+        source_turn_id="source-turn",
+        assignments=(
+            AgentAssignment(task_id="W1", agent="telecom_agent", objective="变更套餐", capability="plan_change"),
+            AgentAssignment(task_id="W2", agent="telecom_agent", objective="开启漫游", capability="roaming"),
+        ),
+    )
+    state = create_chat_state(
+        "u1",
+        "clarify-cancel",
+        "取消",
+        turn_id="cancel-turn",
+        pending_write_plan=plan.model_dump(mode="json"),
+    )
+
+    update = asyncio.run(supervisor_graph_nodes.supervisor_manager_node(state))
+
+    assert update["pending_write_plan"] is None
+    assert update["pending_task"] is None
+    assert update["supervisor_decision"]["action"] == "finish"
+    assert "2 项操作未执行" in update["supervisor_response"]
+
+
 def test_knowledge_agent_owns_domain_rag(monkeypatch) -> None:
     async def retrieve(_state, domain, capability):
         assert domain == "retail"
@@ -410,13 +670,19 @@ def test_knowledge_agent_owns_domain_rag(monkeypatch) -> None:
 def test_tool_agent_receives_only_its_assigned_part_of_a_composite_request(monkeypatch) -> None:
     _platform()
     captured_messages = []
+    captured_tools = []
     responses = iter([
-        Response('{"action":"tool_call","tool_name":"telecom_get_usage_profile","arguments":{}}'),
+        AIMessage(content="", tool_calls=[{
+            "id": "call-usage-1",
+            "name": "telecom_get_usage_profile",
+            "args": {},
+        }]),
         Response('{"action":"final","response":"Current-month data usage was retrieved."}'),
     ])
 
-    def invoke(messages, **_kwargs):
+    def invoke(messages, **kwargs):
         captured_messages.append(messages)
+        captured_tools.append(kwargs["tools"])
         return next(responses)
 
     monkeypatch.setattr(tool_agent, "invoke_llm", invoke)
@@ -428,26 +694,193 @@ def test_tool_agent_receives_only_its_assigned_part_of_a_composite_request(monke
         capability="usage",
     )
 
+    state = create_chat_state(
+        "u1",
+        "s-composite",
+        "check current data usage and whether I bought products this month",
+    )
     result = asyncio.run(tool_agent.run_tool_agent(
         assignment,
-        create_chat_state(
-            "u1",
-            "s-composite",
-            "check current data usage and whether I bought products this month",
-        ),
+        state,
         _identity("s-composite"),
     ))
 
     first_payload = json.loads(captured_messages[0][-1].content)
+    assert len(captured_messages[0]) == 2
+    assert isinstance(captured_messages[0][0], SystemMessage)
+    assert isinstance(captured_messages[0][1], HumanMessage)
+    assert first_payload["type"] == "agent_assignment"
     assert first_payload["user_query"] == objective
     assert "bought products" not in first_payload["user_query"]
     assert first_payload["conversation_context"]["summary"] == ""
     assert first_payload["conversation_context"]["recent_messages"] == []
+    assert "observations" not in first_payload
     assert "若工具 Schema 未把 line_id" in captured_messages[0][0].content
+    second_messages = captured_messages[1]
+    assert len(second_messages) == 4
+    assert isinstance(second_messages[2], AIMessage)
+    assert isinstance(second_messages[3], ToolMessage)
+    assert second_messages[2].tool_calls[0]["id"] == "call-usage-1"
+    assert second_messages[3].tool_call_id == "call-usage-1"
+    observation_payload = json.loads(second_messages[3].content)
+    assert observation_payload["type"] == "tool_result"
+    assert observation_payload["completed_step"] == 1
+    assert observation_payload["observation"]["tool_name"] == "telecom_get_usage_profile"
+    native_names = {
+        item["function"]["name"]
+        for item in captured_tools[0]
+    }
+    assert "telecom_get_usage_profile" in native_names
     assert result.status == "succeeded"
     observation = result.facts["observations"][0]
     assert observation["arguments"] == {}
     assert observation["result"]["line_id"] == "L1"
+    assert len(state["messages"]) == 1
+    assert state["messages"][0].content == (
+        "check current data usage and whether I bought products this month"
+    )
+    assert "subagent_messages" not in state
+
+
+def test_tool_agent_receives_only_explicit_dependency_results(monkeypatch) -> None:
+    _platform()
+    captured = {}
+    responses = iter([
+        Response(
+            '{"action":"tool_call","tool_name":"telecom_get_current_plan",'
+            '"arguments":{"line_id":"L1"}}'
+        ),
+        Response('{"action":"final","response":"已结合上游结果检查套餐。"}'),
+    ])
+
+    def invoke(messages, **_kwargs):
+        if "payload" not in captured:
+            captured["payload"] = json.loads(messages[-1].content)
+            captured["system"] = messages[0].content
+        return next(responses)
+
+    monkeypatch.setattr(tool_agent, "invoke_llm", invoke)
+    assignment = AgentAssignment(
+        task_id="R-dependent",
+        agent="telecom_agent",
+        objective="结合上游知识检查当前套餐",
+        capability="current_plan",
+        dependencies=("K-policy",),
+        arguments={"line_id": "L1"},
+    )
+    dependency = AgentResult(
+        task_id="K-policy",
+        agent="knowledge_agent",
+        status="succeeded",
+        facts={"rag": {"grounded": True}},
+        user_fragment="订单送达后可按政策申请退货。[1]",
+    ).model_dump(mode="json")
+
+    result = asyncio.run(tool_agent.run_tool_agent(
+        assignment,
+        create_chat_state("u1", "s-dependent", assignment.objective),
+        _identity("s-dependent"),
+        dependency_results={"K-policy": dependency},
+    ))
+
+    assert result.status == "succeeded"
+    assert captured["payload"]["dependency_results"] == {"K-policy": dependency}
+    assert "不得替代写操作所需的本轮实时读取" in captured["system"]
+
+
+def test_tool_agent_message_trajectory_does_not_cross_turn_invocations(monkeypatch) -> None:
+    _platform()
+    captured_messages = []
+    responses = iter([
+        AIMessage(content="", tool_calls=[{
+            "id": "call-first-turn",
+            "name": "telecom_get_usage_profile",
+            "args": {},
+        }]),
+        Response('{"action":"final","response":"first turn usage"}'),
+        AIMessage(content="", tool_calls=[{
+            "id": "call-second-turn",
+            "name": "telecom_get_usage_profile",
+            "args": {},
+        }]),
+        Response('{"action":"final","response":"second turn usage"}'),
+    ])
+
+    def invoke(messages, **_kwargs):
+        captured_messages.append(messages)
+        return next(responses)
+
+    monkeypatch.setattr(tool_agent, "invoke_llm", invoke)
+    first_assignment = AgentAssignment(
+        task_id="T-first",
+        agent="telecom_agent",
+        objective="FIRST TURN: check current usage",
+        capability="usage",
+    )
+    second_assignment = AgentAssignment(
+        task_id="T-second",
+        agent="telecom_agent",
+        objective="SECOND TURN: check current usage again",
+        capability="usage",
+    )
+
+    first_result = asyncio.run(tool_agent.run_tool_agent(
+        first_assignment,
+        create_chat_state("u1", "same-session", first_assignment.objective, turn_id="turn-1"),
+        _identity("same-session"),
+    ))
+    second_result = asyncio.run(tool_agent.run_tool_agent(
+        second_assignment,
+        create_chat_state("u1", "same-session", second_assignment.objective, turn_id="turn-2"),
+        _identity("same-session"),
+    ))
+
+    assert first_result.status == "succeeded"
+    assert second_result.status == "succeeded"
+    assert len(captured_messages[1]) == 4
+    assert isinstance(captured_messages[1][3], ToolMessage)
+    assert captured_messages[1][3].tool_call_id == "call-first-turn"
+    assert len(captured_messages[2]) == 2
+    second_payload = json.loads(captured_messages[2][1].content)
+    assert second_payload["user_query"] == second_assignment.objective
+    assert "FIRST TURN" not in captured_messages[2][1].content
+
+
+def test_legacy_tool_json_is_normalized_to_tool_messages_during_migration(monkeypatch) -> None:
+    _platform()
+    captured_messages = []
+    responses = iter([
+        Response(
+            '{"action":"tool_call","tool_name":"telecom_get_usage_profile",'
+            '"arguments":{}}'
+        ),
+        Response('{"action":"final","response":"usage loaded"}'),
+    ])
+
+    def invoke(messages, **_kwargs):
+        captured_messages.append(messages)
+        return next(responses)
+
+    monkeypatch.setattr(tool_agent, "invoke_llm", invoke)
+    assignment = AgentAssignment(
+        task_id="T-legacy-tool-call",
+        agent="telecom_agent",
+        objective="check current usage",
+        capability="usage",
+    )
+
+    result = asyncio.run(tool_agent.run_tool_agent(
+        assignment,
+        create_chat_state("u1", "legacy-tool-call", assignment.objective),
+        _identity("legacy-tool-call"),
+    ))
+
+    assert result.status == "succeeded"
+    replay = captured_messages[1]
+    assert isinstance(replay[2], AIMessage)
+    assert replay[2].tool_calls[0]["id"] == "legacy-tool-call-1-1"
+    assert isinstance(replay[3], ToolMessage)
+    assert replay[3].tool_call_id == "legacy-tool-call-1-1"
 
 
 def test_clarification_result_preserves_structured_assignment_for_next_turn(monkeypatch) -> None:

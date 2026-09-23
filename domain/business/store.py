@@ -10,7 +10,7 @@ from typing import Any, Protocol
 from uuid import uuid4
 
 from pkg.exceptions.exception import RequestConflictError, StorageOperationError
-from pkg.security import encrypt_pii
+from pkg.security import decrypt_pii, encrypt_pii
 
 
 class BusinessStore(Protocol):
@@ -332,6 +332,34 @@ class InMemoryBusinessStore:
                 "is_default": set_default,
             },
         }
+
+    def _action_retail_create_address_reusing_default_contact(
+        self,
+        args: dict[str, Any],
+        user_id: str,
+        action_id: str,
+    ) -> dict[str, Any]:
+        """原子读取唯一默认联系人，再复用标准地址创建实现。"""
+
+        defaults = [
+            row
+            for row in self._data.get("addresses", [])
+            if row.get("user_id") == user_id
+            and row.get("status") == "active"
+            and row.get("is_default") == 1
+        ]
+        if len(defaults) != 1:
+            raise RequestConflictError()
+        source = defaults[0]
+        recipient = source.get("recipient") or decrypt_pii(source.get("recipient_cipher"))
+        phone = source.get("phone") or decrypt_pii(source.get("phone_cipher"))
+        if not isinstance(recipient, str) or not recipient or not isinstance(phone, str) or not phone:
+            raise RequestConflictError()
+        return self._action_retail_create_address(
+            {**args, "recipient": recipient, "phone": phone},
+            user_id,
+            action_id,
+        )
 
     def _action_retail_request_return(self, args: dict[str, Any], user_id: str, action_id: str) -> dict[str, Any]:
         """验证可退数量后把已送达订单转为退货申请状态。"""
