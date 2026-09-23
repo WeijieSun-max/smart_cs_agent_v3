@@ -11,14 +11,26 @@ function duration(trace: NodeTrace) {
   return formatDuration(Math.max(0, new Date(trace.completedAt).getTime() - new Date(trace.startedAt).getTime()))
 }
 
-function TraceSection({ title, value, defaultOpen = false }: { title: string; value: unknown; defaultOpen?: boolean }) {
+type TraceValueKind = "data" | "prompt" | "response"
+
+function TraceSection({
+  title,
+  value,
+  kind = "data",
+  defaultOpen = false,
+}: {
+  title: string
+  value: unknown
+  kind?: TraceValueKind
+  defaultOpen?: boolean
+}) {
   const [open, setOpen] = useState(defaultOpen)
   return <Collapsible.Root open={open} onOpenChange={setOpen}>
     <Collapsible.Trigger className="group flex w-full items-center gap-2 py-1 text-left">
       <ChevronDown className="h-3 w-3 shrink-0 text-muted-foreground transition-transform group-data-[state=open]:rotate-180" />
       <span className="text-[10px] font-semibold text-muted-foreground">{title}</span>
     </Collapsible.Trigger>
-    <Collapsible.Content className="pb-1"><NodeTraceValue value={value} /></Collapsible.Content>
+    <Collapsible.Content className="pb-1"><NodeTraceValue value={value} kind={kind} /></Collapsible.Content>
   </Collapsible.Root>
 }
 
@@ -58,8 +70,8 @@ export function NodeTraceCard({ trace }: { trace: NodeTrace }) {
             <span>LLM Call #{index + 1}</span>
             <span className={cn(call.status === "error" && "text-red-500", call.status === "success" && "text-emerald-500")}>{call.status}</span>
           </div>
-          <TraceSection title="LLM Prompt" value={call.prompt} />
-          <TraceSection title="LLM Response" value={call.response} />
+          <TraceSection title="LLM Prompt" value={call.prompt} kind="prompt" />
+          <TraceSection title="LLM Response" value={call.response} kind="response" />
         </div>)}
         <TraceSection title="Node Output" value={trace.output} />
         {trace.error !== undefined && <TraceSection title="Node Error" value={trace.error} defaultOpen />}

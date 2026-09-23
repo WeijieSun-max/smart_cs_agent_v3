@@ -6,7 +6,8 @@ interface HistoryMessage { role: Message["role"]; content: string; created_at?: 
 
 export const sessionService = {
   async getSessions(): Promise<Session[]> {
-    const { data } = await apiClient.get<{ sessions: Session[] }>("/sessions")
+    const userId = await agentService.getCurrentUserId()
+    const { data } = await apiClient.get<{ sessions: Session[] }>("/sessions", { params: { user_id: userId } })
     return data.sessions
   },
   async getHistory(sessionId: string): Promise<Message[]> {
@@ -15,14 +16,17 @@ export const sessionService = {
     return data.messages.map((message, index) => ({ id: `${sessionId}-${index}`, role: message.role, content: message.content, createdAt: message.created_at ?? new Date().toISOString(), status: "complete" }))
   },
   async deleteSession(sessionId: string): Promise<void> {
-    await apiClient.delete(`/sessions/${sessionId}`)
+    const userId = await agentService.getCurrentUserId()
+    await apiClient.delete(`/sessions/${sessionId}`, { params: { user_id: userId } })
   },
   async createSession(sessionId: string, agentId = "general"): Promise<Session> {
-    const { data } = await apiClient.post<Session>("/sessions", { session_id: sessionId, agent_id: agentId })
+    const userId = await agentService.getCurrentUserId()
+    const { data } = await apiClient.post<Session>("/sessions", { user_id: userId, session_id: sessionId, agent_id: agentId })
     return data
   },
   async updateSession(sessionId: string, patch: { title?: string; favorite?: boolean }): Promise<Session> {
-    const { data } = await apiClient.patch<Session>(`/sessions/${sessionId}`, patch)
+    const userId = await agentService.getCurrentUserId()
+    const { data } = await apiClient.patch<Session>(`/sessions/${sessionId}`, { ...patch, user_id: userId })
     return data
   },
 }

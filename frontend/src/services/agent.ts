@@ -54,11 +54,13 @@ export const agentService = {
     return data
   },
   async stop(sessionId: string): Promise<void> {
-    await apiClient.post("/agent/stop", { session_id: sessionId })
+    const userId = await agentService.getCurrentUserId()
+    await apiClient.post("/agent/stop", { user_id: userId, session_id: sessionId })
   },
   async getRuns(sessionId: string): Promise<AgentRunRecord[]> {
+    const userId = await agentService.getCurrentUserId()
     const { data } = await apiClient.get<{ runs: BackendRun[] }>("/runs", {
-      params: { session_id: sessionId },
+      params: { user_id: userId, session_id: sessionId },
     })
     return data.runs.map((run) => ({
       turnId: run.turn_id,
