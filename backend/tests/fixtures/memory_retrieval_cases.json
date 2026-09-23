@@ -1,0 +1,62 @@
+[
+  {
+    "name": "refund_follow_up",
+    "query": "继续处理上次退款工单",
+    "memories": [
+      {"id": "10000000-0000-0000-0000-000000000001", "type": "task", "content": "继续跟进退款工单处理进度", "score": 0.96, "relevant": true},
+      {"id": "10000000-0000-0000-0000-000000000002", "type": "preference", "content": "偏好短信接收退款进度", "score": 0.82, "relevant": true},
+      {"id": "10000000-0000-0000-0000-000000000003", "type": "fact", "content": "曾咨询理财产品", "score": 0.22, "relevant": false},
+      {"id": "10000000-0000-0000-0000-000000000004", "type": "episode", "content": "了解过开户材料", "score": 0.18, "relevant": false},
+      {"id": "10000000-0000-0000-0000-000000000005", "type": "preference", "content": "偏好稳健型产品", "score": 0.16, "relevant": false},
+      {"id": "10000000-0000-0000-0000-000000000006", "type": "fact", "content": "常用中文服务", "score": 0.12, "relevant": false}
+    ]
+  },
+  {
+    "name": "product_risk_preference",
+    "query": "推荐符合我风险偏好的理财产品",
+    "memories": [
+      {"id": "20000000-0000-0000-0000-000000000001", "type": "preference", "content": "明确偏好稳健型低波动理财产品", "score": 0.95, "relevant": true},
+      {"id": "20000000-0000-0000-0000-000000000002", "type": "episode", "content": "曾咨询产品风险等级", "score": 0.86, "relevant": true},
+      {"id": "20000000-0000-0000-0000-000000000003", "type": "task", "content": "等待补充开户材料", "score": 0.31, "relevant": false},
+      {"id": "20000000-0000-0000-0000-000000000004", "type": "fact", "content": "咨询过退款政策", "score": 0.20, "relevant": false},
+      {"id": "20000000-0000-0000-0000-000000000005", "type": "preference", "content": "偏好短信联系", "score": 0.18, "relevant": false},
+      {"id": "20000000-0000-0000-0000-000000000006", "type": "episode", "content": "查询过订单物流", "score": 0.14, "relevant": false}
+    ]
+  },
+  {
+    "name": "onboarding_documents",
+    "query": "开户还缺哪些材料",
+    "memories": [
+      {"id": "30000000-0000-0000-0000-000000000001", "type": "task", "content": "开户流程待补充地址证明材料", "score": 0.97, "relevant": true},
+      {"id": "30000000-0000-0000-0000-000000000002", "type": "episode", "content": "此前已开始咨询开户链接", "score": 0.84, "relevant": true},
+      {"id": "30000000-0000-0000-0000-000000000003", "type": "preference", "content": "偏好低风险产品", "score": 0.29, "relevant": false},
+      {"id": "30000000-0000-0000-0000-000000000004", "type": "fact", "content": "曾查询退款时效", "score": 0.19, "relevant": false},
+      {"id": "30000000-0000-0000-0000-000000000005", "type": "episode", "content": "咨询过订单物流", "score": 0.15, "relevant": false},
+      {"id": "30000000-0000-0000-0000-000000000006", "type": "preference", "content": "偏好电话联系", "score": 0.12, "relevant": false}
+    ]
+  },
+  {
+    "name": "contact_preference",
+    "query": "后续用什么方式联系我",
+    "memories": [
+      {"id": "40000000-0000-0000-0000-000000000001", "type": "preference", "content": "用户明确要求后续仅通过短信联系", "score": 0.94, "relevant": true},
+      {"id": "40000000-0000-0000-0000-000000000002", "type": "task", "content": "等待客服短信回复工单结果", "score": 0.83, "relevant": true},
+      {"id": "40000000-0000-0000-0000-000000000003", "type": "fact", "content": "使用中文服务", "score": 0.25, "relevant": false},
+      {"id": "40000000-0000-0000-0000-000000000004", "type": "episode", "content": "咨询过开户步骤", "score": 0.19, "relevant": false},
+      {"id": "40000000-0000-0000-0000-000000000005", "type": "preference", "content": "偏好稳健投资", "score": 0.16, "relevant": false},
+      {"id": "40000000-0000-0000-0000-000000000006", "type": "fact", "content": "曾了解退款政策", "score": 0.11, "relevant": false}
+    ]
+  },
+  {
+    "name": "order_history",
+    "query": "上次订单物流问题后来怎么样了",
+    "memories": [
+      {"id": "50000000-0000-0000-0000-000000000001", "type": "episode", "content": "上次咨询订单物流延迟并要求客服跟进", "score": 0.96, "relevant": true},
+      {"id": "50000000-0000-0000-0000-000000000002", "type": "task", "content": "待确认订单物流异常处理结果", "score": 0.91, "relevant": true},
+      {"id": "50000000-0000-0000-0000-000000000003", "type": "preference", "content": "偏好稳健理财", "score": 0.24, "relevant": false},
+      {"id": "50000000-0000-0000-0000-000000000004", "type": "fact", "content": "已了解开户要求", "score": 0.18, "relevant": false},
+      {"id": "50000000-0000-0000-0000-000000000005", "type": "episode", "content": "曾咨询退款政策", "score": 0.16, "relevant": false},
+      {"id": "50000000-0000-0000-0000-000000000006", "type": "preference", "content": "偏好电话联系", "score": 0.12, "relevant": false}
+    ]
+  }
+]

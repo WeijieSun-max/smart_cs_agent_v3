@@ -1,0 +1,7 @@
+{
+  "schema_version": 1,
+  "skills": {
+    "retail-order-assistance@0.1.0": "9050fb73f2bb913b5850373f07a43dd9f178ec876a17b74a96250e5fb0cdd095",
+    "telecom-plan-recommendation@0.1.0": "a7ba6e54b1bfc4728224551ae016f5472416e3c8ecfe901b44fe72a0d8b9c644"
+  }
+}
